@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # Applies every migration in supabase/migrations/ against a fresh
+      # local Postgres + Auth + Storage stack (Docker, preinstalled on
+      # GitHub-hosted runners). No hosted Supabase project or secrets
+      # are required for this job.
+      - name: Start local Supabase stack
+        run: supabase start
+
+      - name: Export local Supabase connection details
+        run: |
+          supabase status -o env \
+            --override-name api.url=NEXT_PUBLIC_SUPABASE_URL \
+            --override-name auth.anon_key=NEXT_PUBLIC_SUPABASE_ANON_KEY \
+            --override-name auth.service_role_key=SUPABASE_SERVICE_ROLE_KEY \
+            >> "$GITHUB_ENV"
+
+      - name: Run tests (unit, integration, database/RLS)
+        run: npm test
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SITE_URL: http://localhost:3000
+
+      - name: Stop local Supabase stack
+        if: always()
+        run: supabase stop
