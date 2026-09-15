@@ -30,6 +30,25 @@ export async function listWorkspacesForCurrentUser(): Promise<Workspace[]> {
 }
 
 /**
+ * Resolves a workspace by slug, scoped to the current user's membership via
+ * RLS (workspaces_select_members). Returns null both when the slug doesn't
+ * exist and when the user isn't a member — RLS already collapses that
+ * distinction, so the caller doesn't need to (and shouldn't) tell them
+ * apart (Engineering Blueprint §8: RLS is authoritative for tenant
+ * isolation, application checks are UX-only).
+ */
+export async function getWorkspaceBySlug(slug: string): Promise<Workspace | null> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("workspaces").select("*").eq("slug", slug).maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to load workspace: ${error.message}`);
+  }
+
+  return data;
+}
+
+/**
  * Creates a workspace and its owner membership atomically via the
  * `create_workspace` RPC (see Database Architecture §2, Engineering
  * Blueprint §23 migration). Retries with a suffixed slug on collision.

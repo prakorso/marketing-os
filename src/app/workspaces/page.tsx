@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
@@ -33,9 +34,14 @@ export default async function WorkspacesPage() {
       ) : (
         <ul className="flex flex-col gap-2">
           {workspaces.map((workspace) => (
-            <li key={workspace.id} className="rounded border border-gray-200 px-3 py-2">
-              {workspace.name}
-              <span className="ml-2 text-xs text-gray-500">/{workspace.slug}</span>
+            <li key={workspace.id}>
+              <Link
+                href={`/w/${workspace.slug}`}
+                className="block rounded border border-gray-200 px-3 py-2 hover:bg-gray-50"
+              >
+                {workspace.name}
+                <span className="ml-2 text-xs text-gray-500">/{workspace.slug}</span>
+              </Link>
             </li>
           ))}
         </ul>
