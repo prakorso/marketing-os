@@ -1,0 +1,3 @@
+-- Intentionally empty. Referenced by supabase/config.toml (db.seed.sql_paths)
+-- so `supabase db reset` has a seed file to load. Add local-only seed data
+-- here if needed; do not rely on this file for any required data.
