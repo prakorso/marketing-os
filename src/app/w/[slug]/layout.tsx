@@ -33,15 +33,7 @@ export default async function WorkspaceLayout({
   }
 
   return (
-    <AppShell
-      workspaceName={workspace.name}
-      workspaceSlug={workspace.slug}
-      // Hardcoded: this phase has exactly one page under /w/[slug]. Once
-      // Brand/Assets/Content Studio pages exist, activePath will need to
-      // be derived per-route rather than fixed in the shared layout.
-      activePath="command-center"
-      userLabel={user.email ?? "Signed in"}
-    >
+    <AppShell workspaceName={workspace.name} workspaceSlug={workspace.slug} userLabel={user.email ?? "Signed in"}>
       {children}
     </AppShell>
   );

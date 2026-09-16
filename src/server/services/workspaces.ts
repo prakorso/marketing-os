@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
-import type { Workspace } from "@/types/database";
+import type { Workspace, WorkspaceRole } from "@/types/database";
 
 const POSTGRES_UNIQUE_VIOLATION = "23505";
 
@@ -43,6 +43,23 @@ export async function getWorkspaceBySlug(slug: string): Promise<Workspace | null
 
   if (error) {
     throw new Error(`Failed to load workspace: ${error.message}`);
+  }
+
+  return data;
+}
+
+/**
+ * The current user's role in a workspace, or null if they aren't a member
+ * (RLS-scoped via get_workspace_role, Foundation). Used for UI-level
+ * write-control gating only — RLS remains the authoritative enforcement
+ * for every actual read/write (Engineering Blueprint §8).
+ */
+export async function getCurrentUserRole(workspaceId: string): Promise<WorkspaceRole | null> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("get_workspace_role", { p_workspace_id: workspaceId });
+
+  if (error) {
+    throw new Error(`Failed to resolve workspace role: ${error.message}`);
   }
 
   return data;

@@ -1,3 +1,7 @@
+"use client";
+
+import { usePathname } from "next/navigation";
+
 import {
   AnalyticsIcon,
   AssetsIcon,
@@ -16,17 +20,28 @@ import { NavItem } from "@/components/layout/NavItem";
 type SidebarProps = {
   workspaceName: string;
   workspaceSlug: string;
-  activePath: "command-center";
 };
 
 /**
  * Primary navigation. Reflects the full product shape shown in Stitch, but
- * only Command Center is a real link this phase — every other module's UI
- * has not been implemented yet, regardless of whether its backend exists
- * (Brand/Content/Assets), and is rendered as a disabled placeholder so the
- * shell doesn't imply availability it doesn't have.
+ * only screens that actually have a UI route implemented are real links —
+ * every other module is rendered as a disabled placeholder so the shell
+ * doesn't imply availability it doesn't have, regardless of whether its
+ * backend exists.
+ *
+ * Active state is derived from the current pathname (client-side) rather
+ * than passed down from the layout — this generalizes correctly as more
+ * routes are added under /w/[slug], instead of the previous single
+ * hardcoded "command-center" value.
  */
-export function Sidebar({ workspaceName, workspaceSlug, activePath }: SidebarProps) {
+export function Sidebar({ workspaceName, workspaceSlug }: SidebarProps) {
+  const pathname = usePathname();
+  const base = `/w/${workspaceSlug}`;
+  const isCommandCenter = pathname === base;
+  const isBrand = pathname === `${base}/brand` || pathname?.startsWith(`${base}/brand/`);
+  const isAssets = pathname === `${base}/assets` || pathname?.startsWith(`${base}/assets/`);
+  const isContent = pathname === `${base}/content` || pathname?.startsWith(`${base}/content/`);
+
   return (
     <aside className="fixed inset-y-0 left-0 z-30 flex w-64 shrink-0 flex-col justify-between border-r border-outline-variant bg-surface-container-lowest">
       <div>
@@ -54,20 +69,20 @@ export function Sidebar({ workspaceName, workspaceSlug, activePath }: SidebarPro
         </div>
 
         <nav className="flex flex-col gap-space-xs px-space-lg">
-          <NavItem
-            label="Command Center"
-            icon={CommandCenterIcon}
-            href={`/w/${workspaceSlug}`}
-            active={activePath === "command-center"}
-          />
+          <NavItem label="Command Center" icon={CommandCenterIcon} href={base} active={isCommandCenter} />
           <NavItem label="Intelligence" icon={IntelligenceIcon} />
-          <NavItem label="Content Studio" icon={ContentStudioIcon} />
+          <NavItem
+            label="Content Studio"
+            icon={ContentStudioIcon}
+            href={`${base}/content`}
+            active={isContent}
+          />
           <NavItem label="Content Calendar" icon={CalendarIcon} />
           <NavItem label="Social Analytics" icon={AnalyticsIcon} />
           <NavItem label="Campaigns" icon={CampaignsIcon} />
           <NavItem label="Performance Marketing" icon={PerformanceIcon} />
-          <NavItem label="Assets" icon={AssetsIcon} />
-          <NavItem label="Brand" icon={BrandIcon} />
+          <NavItem label="Assets" icon={AssetsIcon} href={`${base}/assets`} active={isAssets} />
+          <NavItem label="Brand" icon={BrandIcon} href={`${base}/brand`} active={isBrand} />
           <NavItem label="Automation" icon={AutomationIcon} />
           <NavItem label="Settings" icon={SettingsIcon} />
         </nav>
