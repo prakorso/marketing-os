@@ -1,8 +1,10 @@
 import "server-only";
 
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentUserRole } from "@/server/services/workspaces";
-import type { ContentApprovalStatus, Publication } from "@/types/database";
+import type { ContentApprovalStatus, Database, Publication } from "@/types/database";
 
 /**
  * Business-row lifecycle for publications, including the execution
@@ -27,12 +29,52 @@ import type { ContentApprovalStatus, Publication } from "@/types/database";
  * (surfaced as a Postgres error) is sufficient, since all three are called
  * only from the controlled sequence in publication-execution.ts, not
  * directly from arbitrary user input.
+ *
+ * MVP-2.4 adds three "AsSystem" counterparts (markPublishingAsSystem,
+ * markPublishedAsSystem, markFailedAsSystem) for the trusted, unattended
+ * scheduler path (src/server/services/publication-scheduler.ts →
+ * publication-execution.ts's executePublicationAsSystem), which has no
+ * end-user session and therefore cannot satisfy assertEditor(). These are
+ * NOT a generic "skip authorization" flag: each one requires the caller to
+ * explicitly construct and pass in a Supabase client (always a service-role
+ * client in practice), rather than defaulting to one internally the way
+ * the user-facing functions do. That makes misuse from ordinary
+ * application code structurally deliberate, not an accidental flag flip —
+ * the same pattern already used for Vault access. The user-facing
+ * functions below are completely unchanged: same assertEditor() gate, same
+ * RLS-scoped client, same public signature. Authorization for the "AsSystem"
+ * path is not RLS/assertEditor at all — it is that these functions are only
+ * ever reachable from publication-scheduler.ts, which itself is only ever
+ * invoked by a Netlify Scheduled Function (server-side, no client/browser
+ * entry point). Business-rule enforcement (approval gate, lifecycle gate)
+ * remains in the database triggers regardless of which path is used —
+ * unchanged and un-bypassable by either.
  */
 async function assertEditor(workspaceId: string) {
   const role = await getCurrentUserRole(workspaceId);
   if (role !== "owner" && role !== "admin" && role !== "marketer") {
     throw new Error("You do not have permission to manage publications in this workspace");
   }
+}
+
+async function updatePublicationRow(
+  client: SupabaseClient<Database>,
+  workspaceId: string,
+  publicationId: string,
+  fields: Database["public"]["Tables"]["publications"]["Update"],
+): Promise<Publication> {
+  const { data, error } = await client
+    .from("publications")
+    .update(fields)
+    .eq("workspace_id", workspaceId)
+    .eq("id", publicationId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to update publication: ${error.message}`);
+  }
+  return data;
 }
 
 export async function listPublicationsForWorkspace(workspaceId: string): Promise<Publication[]> {
@@ -258,20 +300,30 @@ export async function cancelPublication(workspaceId: string, publicationId: stri
  */
 export async function markPublishing(workspaceId: string, publicationId: string): Promise<Publication> {
   await assertEditor(workspaceId);
+  return updatePublicationRow(await createClient(), workspaceId, publicationId, { status: "publishing" });
+}
 
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("publications")
-    .update({ status: "publishing" })
-    .eq("workspace_id", workspaceId)
-    .eq("id", publicationId)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to mark publication as publishing: ${error.message}`);
-  }
-  return data;
+/**
+ * Trusted-system counterpart of markPublishing — see module header
+ * comment. `client` must be a service-role client constructed by the
+ * caller; there is no internal fallback to createClient() here.
+ *
+ * Not currently called by executePublicationAsSystem: the scheduled-
+ * execution path's claim_due_publications RPC already performs the
+ * scheduled -> publishing transition atomically as part of claiming a
+ * row (20260916180000_publication_scheduler_claim.sql), so
+ * executePublicationAsSystem starts from an already-'publishing' row and
+ * skips this step to avoid a rejected publishing -> publishing double
+ * transition. Kept exported for API symmetry with markPublishedAsSystem/
+ * markFailedAsSystem and for any future trusted-system caller that needs
+ * to perform this specific transition directly.
+ */
+export async function markPublishingAsSystem(
+  client: SupabaseClient<Database>,
+  workspaceId: string,
+  publicationId: string,
+): Promise<Publication> {
+  return updatePublicationRow(client, workspaceId, publicationId, { status: "publishing" });
 }
 
 export type MarkPublishedInput = {
@@ -284,32 +336,33 @@ export type MarkPublishedInput = {
  * Transitions a publication to 'published'. Only publishing → published is
  * allowed — enforced by enforce_publication_lifecycle_transitions.
  */
+function publishedFields(result: MarkPublishedInput): Database["public"]["Tables"]["publications"]["Update"] {
+  return {
+    status: "published",
+    published_at: new Date().toISOString(),
+    external_publication_id: result.externalPublicationId,
+    external_url: result.externalUrl,
+    provider_response: result.providerResponse,
+  };
+}
+
 export async function markPublished(
   workspaceId: string,
   publicationId: string,
   result: MarkPublishedInput,
 ): Promise<Publication> {
   await assertEditor(workspaceId);
+  return updatePublicationRow(await createClient(), workspaceId, publicationId, publishedFields(result));
+}
 
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("publications")
-    .update({
-      status: "published",
-      published_at: new Date().toISOString(),
-      external_publication_id: result.externalPublicationId,
-      external_url: result.externalUrl,
-      provider_response: result.providerResponse,
-    })
-    .eq("workspace_id", workspaceId)
-    .eq("id", publicationId)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to mark publication as published: ${error.message}`);
-  }
-  return data;
+/** Trusted-system counterpart of markPublished — see module header comment. */
+export async function markPublishedAsSystem(
+  client: SupabaseClient<Database>,
+  workspaceId: string,
+  publicationId: string,
+  result: MarkPublishedInput,
+): Promise<Publication> {
+  return updatePublicationRow(client, workspaceId, publicationId, publishedFields(result));
 }
 
 export type MarkFailedInput = {
@@ -322,29 +375,30 @@ export type MarkFailedInput = {
  * Transitions a publication to 'failed'. Only publishing → failed is
  * allowed — enforced by enforce_publication_lifecycle_transitions.
  */
+function failedFields(failure: MarkFailedInput): Database["public"]["Tables"]["publications"]["Update"] {
+  return {
+    status: "failed",
+    error_code: failure.errorCode,
+    error_message: failure.errorMessage,
+    provider_response: failure.providerResponse ?? {},
+  };
+}
+
 export async function markFailed(
   workspaceId: string,
   publicationId: string,
   failure: MarkFailedInput,
 ): Promise<Publication> {
   await assertEditor(workspaceId);
+  return updatePublicationRow(await createClient(), workspaceId, publicationId, failedFields(failure));
+}
 
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("publications")
-    .update({
-      status: "failed",
-      error_code: failure.errorCode,
-      error_message: failure.errorMessage,
-      provider_response: failure.providerResponse ?? {},
-    })
-    .eq("workspace_id", workspaceId)
-    .eq("id", publicationId)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to mark publication as failed: ${error.message}`);
-  }
-  return data;
+/** Trusted-system counterpart of markFailed — see module header comment. */
+export async function markFailedAsSystem(
+  client: SupabaseClient<Database>,
+  workspaceId: string,
+  publicationId: string,
+  failure: MarkFailedInput,
+): Promise<Publication> {
+  return updatePublicationRow(client, workspaceId, publicationId, failedFields(failure));
 }

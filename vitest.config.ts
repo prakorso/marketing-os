@@ -7,6 +7,18 @@ export default defineConfig({
     environment: "node",
     setupFiles: ["./tests/setup-env.ts"],
     include: ["tests/**/*.test.ts"],
+    // MVP-2.4: claim_due_publications (the scheduler's atomic claim RPC)
+    // is intentionally global/cross-workspace, unlike every other table
+    // this test suite touches. Running test files in parallel (Vitest's
+    // default) against the one shared local Supabase instance let one
+    // file's claim call scoop up another file's due-publication fixture
+    // mid-test, leaving it stuck in 'publishing' with no owner to finish
+    // it — confirmed by reproducing the flake. Every other test file
+    // remains safe under parallelism (fixtures are workspace/row-ID
+    // scoped); only this one RPC breaks that assumption, so the whole
+    // suite runs sequentially rather than special-casing just the
+    // scheduler test files.
+    fileParallelism: false,
   },
   resolve: {
     alias: {

@@ -218,7 +218,7 @@ describe.skipIf(!hasLocalSupabase)("executePublication — provider execution or
     expect(error).toBeNull();
     publicationIds.push(draft!.id);
 
-    await expect(executePublication(workspaceId, draft!.id)).rejects.toThrow(/only a 'scheduled' publication/);
+    await expect(executePublication(workspaceId, draft!.id)).rejects.toThrow(/expected 'scheduled'/);
   });
 });
 
