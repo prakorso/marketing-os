@@ -640,9 +640,15 @@ describe.skipIf(!hasLocalSupabase)("Publications RLS + approval gate — tenant 
         .single();
       track(created?.id);
 
-      // 'publishing' is gated by the approval trigger too, but
-      // variantApprovedId satisfies it — reaching 'publishing' here
-      // exercises only the cancellation gate, not the approval gate.
+      // MVP-2.3 requires publishing to be entered only from scheduled
+      // (enforce_publication_lifecycle_transitions) — traverse that state
+      // first. variantApprovedId satisfies the (still-independent)
+      // approval gate at both steps.
+      await editor.client
+        .from("publications")
+        .update({ status: "scheduled", scheduled_at: new Date().toISOString() })
+        .eq("id", created!.id);
+
       const { error: toPublishingError } = await editor.client
         .from("publications")
         .update({ status: "publishing" })
@@ -672,6 +678,14 @@ describe.skipIf(!hasLocalSupabase)("Publications RLS + approval gate — tenant 
         .single();
       track(created?.id);
 
+      // MVP-2.3 requires published to be entered only from publishing,
+      // which itself requires scheduled first — traverse both.
+      await editor.client
+        .from("publications")
+        .update({ status: "scheduled", scheduled_at: new Date().toISOString() })
+        .eq("id", created!.id);
+      await editor.client.from("publications").update({ status: "publishing" }).eq("id", created!.id);
+
       const { error: toPublishedError } = await editor.client
         .from("publications")
         .update({ status: "published", published_at: new Date().toISOString() })
@@ -693,7 +707,7 @@ describe.skipIf(!hasLocalSupabase)("Publications RLS + approval gate — tenant 
         .from("publications")
         .insert({
           workspace_id: workspaceId,
-          content_variant_id: variantUnapprovedId,
+          content_variant_id: variantApprovedId,
           social_account_id: accountId,
           idempotency_key: crypto.randomUUID(),
         })
@@ -701,7 +715,16 @@ describe.skipIf(!hasLocalSupabase)("Publications RLS + approval gate — tenant 
         .single();
       track(created?.id);
 
-      // 'failed' is not gated by the approval trigger, so any variant works.
+      // 'failed' is not gated by the approval trigger itself, but MVP-2.3
+      // requires it to be entered only from publishing, which requires
+      // scheduled first and IS approval-gated — variantApprovedId
+      // satisfies that intermediate requirement.
+      await editor.client
+        .from("publications")
+        .update({ status: "scheduled", scheduled_at: new Date().toISOString() })
+        .eq("id", created!.id);
+      await editor.client.from("publications").update({ status: "publishing" }).eq("id", created!.id);
+
       const { error: toFailedError } = await editor.client
         .from("publications")
         .update({ status: "failed", error_code: "test_fixture", error_message: "fixture" })
@@ -731,6 +754,10 @@ describe.skipIf(!hasLocalSupabase)("Publications RLS + approval gate — tenant 
         .single();
       track(created?.id);
 
+      await editor.client
+        .from("publications")
+        .update({ status: "scheduled", scheduled_at: new Date().toISOString() })
+        .eq("id", created!.id);
       await editor.client.from("publications").update({ status: "publishing" }).eq("id", created!.id);
 
       // admin is the service-role client — bypasses RLS entirely. The

@@ -5,18 +5,28 @@ import { getCurrentUserRole } from "@/server/services/workspaces";
 import type { ContentApprovalStatus, Publication } from "@/types/database";
 
 /**
- * MVP-2.2 scope: business-row lifecycle only (draft → approved → scheduled
- * → cancelled). No provider adapters, no OAuth, no Vault access, no
- * publishing/publishing-failure transitions — those belong to a future
- * provider-adapter/worker milestone that doesn't exist yet, so
- * markPublishing/markPublished/markFailed/retryPublication are
- * intentionally not implemented here (Engineering Blueprint §22 frames
- * actual provider execution as background/job-worker work).
+ * Business-row lifecycle for publications, including the execution
+ * outcome transitions added in MVP-2.3 (markPublishing/markPublished/
+ * markFailed). retryPublication remains out of scope (retry semantics are
+ * still unspecified by canonical docs — deferred, not invented).
  *
- * Uses only the normal RLS-scoped Supabase client (src/lib/supabase/server.ts)
- * — publications carry no credentials, so there is no reason to reach for
- * the service-role client anywhere in this module (contrast with
- * social-accounts.ts, where Vault access genuinely requires it).
+ * Uses only the normal RLS-scoped Supabase client
+ * (src/lib/supabase/server.ts) — publications carry no credentials
+ * themselves, so there is no reason to reach for the service-role client
+ * anywhere in this module. Credential resolution (Vault) lives entirely in
+ * src/server/services/publication-execution.ts, narrowly scoped to the one
+ * moment a credential is needed immediately before a provider call —
+ * never here.
+ *
+ * markPublishing/markPublished/markFailed rely on the database as the
+ * authoritative source-state enforcement layer
+ * (enforce_publication_lifecycle_transitions,
+ * 20260916160000_publication_execution.sql): scheduled→publishing,
+ * publishing→published, publishing→failed only. These functions do not
+ * duplicate that check in application code — the trigger's rejection
+ * (surfaced as a Postgres error) is sufficient, since all three are called
+ * only from the controlled sequence in publication-execution.ts, not
+ * directly from arbitrary user input.
  */
 async function assertEditor(workspaceId: string) {
   const role = await getCurrentUserRole(workspaceId);
@@ -237,6 +247,104 @@ export async function cancelPublication(workspaceId: string, publicationId: stri
 
   if (error) {
     throw new Error(`Failed to cancel publication: ${error.message}`);
+  }
+  return data;
+}
+
+/**
+ * Transitions a publication to 'publishing'. Only scheduled → publishing
+ * is allowed — enforced by enforce_publication_lifecycle_transitions, not
+ * duplicated here (see module header comment).
+ */
+export async function markPublishing(workspaceId: string, publicationId: string): Promise<Publication> {
+  await assertEditor(workspaceId);
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("publications")
+    .update({ status: "publishing" })
+    .eq("workspace_id", workspaceId)
+    .eq("id", publicationId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to mark publication as publishing: ${error.message}`);
+  }
+  return data;
+}
+
+export type MarkPublishedInput = {
+  externalPublicationId: string;
+  externalUrl: string | null;
+  providerResponse: Record<string, unknown>;
+};
+
+/**
+ * Transitions a publication to 'published'. Only publishing → published is
+ * allowed — enforced by enforce_publication_lifecycle_transitions.
+ */
+export async function markPublished(
+  workspaceId: string,
+  publicationId: string,
+  result: MarkPublishedInput,
+): Promise<Publication> {
+  await assertEditor(workspaceId);
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("publications")
+    .update({
+      status: "published",
+      published_at: new Date().toISOString(),
+      external_publication_id: result.externalPublicationId,
+      external_url: result.externalUrl,
+      provider_response: result.providerResponse,
+    })
+    .eq("workspace_id", workspaceId)
+    .eq("id", publicationId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to mark publication as published: ${error.message}`);
+  }
+  return data;
+}
+
+export type MarkFailedInput = {
+  errorCode: string;
+  errorMessage: string;
+  providerResponse?: Record<string, unknown>;
+};
+
+/**
+ * Transitions a publication to 'failed'. Only publishing → failed is
+ * allowed — enforced by enforce_publication_lifecycle_transitions.
+ */
+export async function markFailed(
+  workspaceId: string,
+  publicationId: string,
+  failure: MarkFailedInput,
+): Promise<Publication> {
+  await assertEditor(workspaceId);
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("publications")
+    .update({
+      status: "failed",
+      error_code: failure.errorCode,
+      error_message: failure.errorMessage,
+      provider_response: failure.providerResponse ?? {},
+    })
+    .eq("workspace_id", workspaceId)
+    .eq("id", publicationId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to mark publication as failed: ${error.message}`);
   }
   return data;
 }
