@@ -243,6 +243,27 @@ export type ContentApproval = {
   created_at: string;
 };
 
+export type SocialPlatform = "instagram" | "tiktok" | "youtube" | "threads";
+
+export type SocialAccountStatus = "connected" | "disconnected" | "expired" | "revoked" | "error";
+
+export type SocialAccount = {
+  id: string;
+  workspace_id: string;
+  brand_id: string | null;
+  platform: SocialPlatform;
+  external_account_id: string;
+  account_name: string;
+  account_handle: string | null;
+  status: SocialAccountStatus;
+  vault_secret_id: string | null;
+  metadata: Record<string, unknown>;
+  connected_at: string;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -379,6 +400,26 @@ export type Database = {
         Insert: Partial<ContentApproval> & Pick<ContentApproval, "workspace_id" | "content_id">;
         // Append-only — no UPDATE policy/grant exists (Database Architecture §7/§19).
         Update: Record<string, never>;
+        Relationships: [];
+      };
+      social_accounts: {
+        Row: SocialAccount;
+        Insert: Partial<SocialAccount> &
+          Pick<SocialAccount, "workspace_id" | "platform" | "external_account_id" | "account_name">;
+        Update: Partial<
+          Pick<
+            SocialAccount,
+            | "account_name"
+            | "account_handle"
+            | "status"
+            | "vault_secret_id"
+            | "metadata"
+            | "last_synced_at"
+            | "brand_id"
+            | "connected_at"
+          >
+        >;
+        // No DELETE policy/grant exists — disconnect is a status change (Database Architecture §19).
         Relationships: [];
       };
     };

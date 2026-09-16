@@ -41,6 +41,7 @@ export function Sidebar({ workspaceName, workspaceSlug }: SidebarProps) {
   const isBrand = pathname === `${base}/brand` || pathname?.startsWith(`${base}/brand/`);
   const isAssets = pathname === `${base}/assets` || pathname?.startsWith(`${base}/assets/`);
   const isContent = pathname === `${base}/content` || pathname?.startsWith(`${base}/content/`);
+  const isSettings = pathname === `${base}/settings` || pathname?.startsWith(`${base}/settings/`);
 
   return (
     <aside className="fixed inset-y-0 left-0 z-30 flex w-64 shrink-0 flex-col justify-between border-r border-outline-variant bg-surface-container-lowest">
@@ -84,7 +85,7 @@ export function Sidebar({ workspaceName, workspaceSlug }: SidebarProps) {
           <NavItem label="Assets" icon={AssetsIcon} href={`${base}/assets`} active={isAssets} />
           <NavItem label="Brand" icon={BrandIcon} href={`${base}/brand`} active={isBrand} />
           <NavItem label="Automation" icon={AutomationIcon} />
-          <NavItem label="Settings" icon={SettingsIcon} />
+          <NavItem label="Settings" icon={SettingsIcon} href={`${base}/settings`} active={isSettings} />
         </nav>
       </div>
 
