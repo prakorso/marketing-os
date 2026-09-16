@@ -36,12 +36,18 @@ jobs:
       - name: Start local Supabase stack
         run: supabase start
 
+      # `supabase status -o env` emits KEY="VALUE" (double-quoted). Appending
+      # that directly to $GITHUB_ENV makes the quote characters part of the
+      # literal value (GitHub Actions does not strip them for a plain
+      # KEY=VALUE line), which broke Supabase client URL validation. Strip
+      # the surrounding quotes before writing each line.
       - name: Export local Supabase connection details
         run: |
           supabase status -o env \
             --override-name api.url=NEXT_PUBLIC_SUPABASE_URL \
             --override-name auth.anon_key=NEXT_PUBLIC_SUPABASE_ANON_KEY \
             --override-name auth.service_role_key=SUPABASE_SERVICE_ROLE_KEY \
+            | sed -E 's/^([A-Za-z_][A-Za-z0-9_]*)="(.*)"$/\1=\2/' \
             >> "$GITHUB_ENV"
 
       - name: Run tests (unit, integration, database/RLS)
