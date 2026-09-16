@@ -264,6 +264,38 @@ export type SocialAccount = {
   updated_at: string;
 };
 
+// publication_status is independent of ContentApprovalStatus — both
+// happen to include an "approved" value but represent different concepts
+// (Database Architecture §17; see also the publications migration header
+// comment). Do not conflate them.
+export type PublicationStatus =
+  | "draft"
+  | "approved"
+  | "scheduled"
+  | "publishing"
+  | "published"
+  | "failed"
+  | "cancelled";
+
+export type Publication = {
+  id: string;
+  workspace_id: string;
+  content_variant_id: string;
+  social_account_id: string;
+  status: PublicationStatus;
+  scheduled_at: string | null;
+  published_at: string | null;
+  external_publication_id: string | null;
+  external_url: string | null;
+  provider_response: Record<string, unknown>;
+  error_code: string | null;
+  error_message: string | null;
+  idempotency_key: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -420,6 +452,26 @@ export type Database = {
           >
         >;
         // No DELETE policy/grant exists — disconnect is a status change (Database Architecture §19).
+        Relationships: [];
+      };
+      publications: {
+        Row: Publication;
+        Insert: Partial<Publication> &
+          Pick<Publication, "workspace_id" | "content_variant_id" | "social_account_id" | "idempotency_key">;
+        Update: Partial<
+          Pick<
+            Publication,
+            | "status"
+            | "scheduled_at"
+            | "published_at"
+            | "external_publication_id"
+            | "external_url"
+            | "provider_response"
+            | "error_code"
+            | "error_message"
+          >
+        >;
+        // No DELETE policy/grant exists — publications are historical records, never hard-deleted (Database Architecture §19).
         Relationships: [];
       };
     };
