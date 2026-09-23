@@ -7,3 +7,6 @@ node_modules/
 .DS_Store
 *.log
 *.tsbuildinfo
+
+# Claude <-> Codex coordination task files (turn state); local only.
+.marqos/coordination/
