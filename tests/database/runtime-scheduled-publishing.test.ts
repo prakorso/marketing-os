@@ -319,20 +319,57 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
       expect((await pub(future)).status).toBe("scheduled");
     });
 
-    it("J/K: at most one row per call, oldest first; concurrent calls never share a row", async () => {
+    it("J/K: at most one row per call, oldest first; concurrent calls never share a row; a skipped row stays claimable", async () => {
       const first = await scheduled(await variant(), allowlisted, -20 * MIN);
       const second = await scheduled(await variant(), allowlisted, -10 * MIN);
       const third = await scheduled(await variant(), allowlisted, -5 * MIN);
       const one = await admin.rpc("claim_runtime_publications", { p_cap: 1 });
+      expect(one.error).toBeNull();
       expect((one.data ?? []).map((row) => row.id)).toEqual([first]);
+
+      // Safety, not liveness: SKIP LOCKED guarantees concurrent callers never
+      // share a row, but NOT that each caller gets one — the PL/pgSQL cursor
+      // may lock both candidates, so the other caller can legitimately get
+      // nothing. Both schedules (1 + 1, or 1 + 0 then a later claim) are valid.
       const [a, b] = await Promise.all([
         admin.rpc("claim_runtime_publications", { p_cap: 1 }),
         admin.rpc("claim_runtime_publications", { p_cap: 1 }),
       ]);
-      const ids = [...(a.data ?? []), ...(b.data ?? [])].map((row) => row.id).sort();
-      expect(ids).toEqual([second, third].sort());
+      expect(a.error).toBeNull();
+      expect(b.error).toBeNull();
+      const rowsA = a.data ?? [];
+      const rowsB = b.data ?? [];
+      // A/H: cap = 1 per call.
+      expect(rowsA.length).toBeLessThanOrEqual(1);
+      expect(rowsB.length).toBeLessThanOrEqual(1);
+      const concurrent = [...rowsA, ...rowsB];
+      // D: the pair claims at least one eligible row.
+      expect(concurrent.length).toBeGreaterThanOrEqual(1);
+      // B: never the same publication twice.
+      expect(new Set(concurrent.map((row) => row.id)).size).toBe(concurrent.length);
+      // C: every returned row is an eligible candidate (allowlisted, same workspace, claimed).
+      for (const row of concurrent) {
+        expect([second, third]).toContain(row.id);
+        expect(row).toMatchObject({ status: "publishing", workspace_id: workspaceId, social_account_id: allowlisted.id });
+      }
+
+      // E: after both settle, any remaining eligible row is claimable by a later invocation.
+      const later: string[] = [];
+      if (concurrent.length === 1) {
+        const next = await admin.rpc("claim_runtime_publications", { p_cap: 1 });
+        expect(next.error).toBeNull();
+        expect((next.data ?? []).length).toBe(1);
+        later.push(...(next.data ?? []).map((row) => row.id));
+      }
+      const all = [first, ...concurrent.map((row) => row.id), ...later];
+      // F: each publication was transitioned exactly once across every call.
+      expect(all.slice().sort()).toEqual([first, second, third].sort());
+      const drained = await admin.rpc("claim_runtime_publications", { p_cap: 1 });
+      expect(drained.data).toEqual([]);
       for (const id of [first, second, third]) {
         expect((await pub(id)).status).toBe("publishing");
+        // G: claiming never creates an attempt.
+        expect(await attempts(id)).toEqual([]);
       }
     });
 
