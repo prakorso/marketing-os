@@ -1,6 +1,15 @@
 -- Marketing OS — MVP-1.2 Content Domain
 -- Tables: content_briefs, content, content_versions, content_variants,
--- assets, content_assets, content_approvals
+-- marqos_assets, marqos_content_assets, content_approvals
+--
+-- marqos_assets/marqos_content_assets are intentionally prefixed, not named
+-- assets/content_assets: this Supabase project already contains a
+-- differently-shaped assets/content_assets table pair belonging to a
+-- separate, pre-existing application sharing the project (MVP-5.24 forensic
+-- audit; MVP-5.25 remediation, Strategy C — narrow coexistence). The
+-- `assets` Storage bucket (20260915063158_storage_foundation.sql) is
+-- unaffected and keeps its original name — only these two database tables
+-- were renamed.
 -- Per Engineering Blueprint §23: RLS is established in the same migration
 -- that creates each table. No table here exists without RLS enabled and
 -- its policies defined.
@@ -17,7 +26,7 @@
 -- DEFERRED DEPENDENCIES (not omitted by oversight — explicitly tracked)
 -- =============================================================================
 --
--- 1. content_versions.ai_job_id, assets.ai_job_id (Database Architecture
+-- 1. content_versions.ai_job_id, marqos_assets.ai_job_id (Database Architecture
 --    §5/§6: "nullable FK -> ai_jobs.id"). The `ai_jobs` table does not exist
 --    yet (AI domain, Engineering Blueprint §23 position 007, after this
 --    migration's position 003). A nullable FK cannot reference a table that
@@ -34,7 +43,7 @@
 --        content_versions_ai_job_id_workspace_id_fkey
 --        foreign key (ai_job_id, workspace_id)
 --        references public.ai_jobs (id, workspace_id);
---      -- (mirror for assets.ai_job_id)
+--      -- (mirror for marqos_assets.ai_job_id)
 --    This is the same deferral pattern already used for
 --    brand_identity.logo_asset_id in 20260915153033_brand.sql.
 --
@@ -56,7 +65,7 @@
 --
 -- Reuses is_workspace_member() / is_workspace_editor() (owner/admin/
 -- marketer) from Foundation/Brand for content_briefs, content,
--- content_versions, content_variants, assets, content_assets.
+-- content_versions, content_variants, assets, marqos_content_assets.
 --
 -- content_approvals is the one exception: INSERT is restricted to
 -- is_workspace_admin() (owner/admin only), NOT is_workspace_editor(). This
@@ -159,8 +168,8 @@ create table public.content_variants (
 
 comment on table public.content_variants is 'platform is intentionally unconstrained text (PRD platform-abstraction principle). Never hard-deleted (Database Architecture §19): no DELETE policy/grant.';
 
--- assets: media metadata. Binary files live in Supabase Storage (assets bucket, Foundation).
-create table public.assets (
+-- marqos_assets: media metadata. Binary files live in Supabase Storage (assets bucket, Foundation).
+create table public.marqos_assets (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references public.workspaces (id) on delete cascade,
   brand_id uuid references public.brands (id) on delete set null,
@@ -175,7 +184,7 @@ create table public.assets (
   duration_ms integer,
   checksum text,
   metadata jsonb,
-  source_asset_id uuid references public.assets (id),
+  source_asset_id uuid references public.marqos_assets (id),
   created_by uuid references public.profiles (id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -184,22 +193,22 @@ create table public.assets (
   foreign key (brand_id, workspace_id) references public.brands (id, workspace_id)
 );
 
-comment on table public.assets is 'Metadata only — binary content lives in the `assets` Storage bucket (20260915063158_storage_foundation.sql), path convention {workspace_id}/{asset_id}.{ext}. ai_job_id intentionally deferred — see header note. Archive-only: no DELETE policy.';
+comment on table public.marqos_assets is 'Metadata only — binary content lives in the `assets` Storage bucket (20260915063158_storage_foundation.sql), path convention {workspace_id}/{asset_id}.{ext}. ai_job_id intentionally deferred — see header note. Archive-only: no DELETE policy.';
 
--- content_assets: junction allowing asset reuse and deterministic carousel ordering.
-create table public.content_assets (
+-- marqos_content_assets: junction allowing asset reuse and deterministic carousel ordering.
+create table public.marqos_content_assets (
   content_id uuid not null references public.content (id) on delete cascade,
-  asset_id uuid not null references public.assets (id) on delete cascade,
+  asset_id uuid not null references public.marqos_assets (id) on delete cascade,
   workspace_id uuid not null references public.workspaces (id) on delete cascade,
   role text,
   sort_order integer,
   created_at timestamptz not null default now(),
   primary key (content_id, asset_id),
   foreign key (content_id, workspace_id) references public.content (id, workspace_id),
-  foreign key (asset_id, workspace_id) references public.assets (id, workspace_id)
+  foreign key (asset_id, workspace_id) references public.marqos_assets (id, workspace_id)
 );
 
-comment on table public.content_assets is 'Junction table. Not a historical record — deleting a row removes the asset association only, never the underlying asset.';
+comment on table public.marqos_content_assets is 'Junction table. Not a historical record — deleting a row removes the asset association only, never the underlying asset.';
 
 -- content_approvals: append-only approval history. Publication authorization source of truth.
 create table public.content_approvals (
@@ -238,12 +247,12 @@ create index content_variants_workspace_id_idx on public.content_variants (works
 create index content_variants_content_version_id_idx on public.content_variants (content_version_id);
 create index content_variants_status_idx on public.content_variants (status);
 
-create index assets_workspace_id_idx on public.assets (workspace_id);
-create index assets_brand_id_idx on public.assets (brand_id);
-create index assets_asset_type_idx on public.assets (asset_type);
+create index marqos_assets_workspace_id_idx on public.marqos_assets (workspace_id);
+create index marqos_assets_brand_id_idx on public.marqos_assets (brand_id);
+create index marqos_assets_asset_type_idx on public.marqos_assets (asset_type);
 
-create index content_assets_workspace_id_idx on public.content_assets (workspace_id);
-create index content_assets_asset_id_idx on public.content_assets (asset_id);
+create index marqos_content_assets_workspace_id_idx on public.marqos_content_assets (workspace_id);
+create index marqos_content_assets_asset_id_idx on public.marqos_content_assets (asset_id);
 
 create index content_approvals_workspace_id_idx on public.content_approvals (workspace_id);
 create index content_approvals_content_id_idx on public.content_approvals (content_id);
@@ -272,8 +281,8 @@ create trigger set_content_variants_updated_at
   for each row
   execute function public.set_updated_at();
 
-create trigger set_assets_updated_at
-  before update on public.assets
+create trigger set_marqos_assets_updated_at
+  before update on public.marqos_assets
   for each row
   execute function public.set_updated_at();
 
@@ -290,8 +299,8 @@ alter table public.content_briefs enable row level security;
 alter table public.content enable row level security;
 alter table public.content_versions enable row level security;
 alter table public.content_variants enable row level security;
-alter table public.assets enable row level security;
-alter table public.content_assets enable row level security;
+alter table public.marqos_assets enable row level security;
+alter table public.marqos_content_assets enable row level security;
 alter table public.content_approvals enable row level security;
 
 -- --- content_briefs -----------------------------------------------------------
@@ -381,22 +390,22 @@ with check (public.is_workspace_editor(workspace_id));
 
 -- No DELETE policy: variants are never hard-deleted (Database Architecture §19).
 
--- --- assets -----------------------------------------------------------
+-- --- marqos_assets ---------------------------------------------------------
 
-create policy "assets_select_members"
-on public.assets
+create policy "marqos_assets_select_members"
+on public.marqos_assets
 for select
 to authenticated
 using (public.is_workspace_member(workspace_id));
 
-create policy "assets_insert_editors"
-on public.assets
+create policy "marqos_assets_insert_editors"
+on public.marqos_assets
 for insert
 to authenticated
 with check (public.is_workspace_editor(workspace_id));
 
-create policy "assets_update_editors"
-on public.assets
+create policy "marqos_assets_update_editors"
+on public.marqos_assets
 for update
 to authenticated
 using (public.is_workspace_editor(workspace_id))
@@ -404,29 +413,29 @@ with check (public.is_workspace_editor(workspace_id));
 
 -- No DELETE policy: archive via archived_at (Database Architecture §19).
 
--- --- content_assets -----------------------------------------------------------
+-- --- marqos_content_assets -----------------------------------------------------------
 
-create policy "content_assets_select_members"
-on public.content_assets
+create policy "marqos_content_assets_select_members"
+on public.marqos_content_assets
 for select
 to authenticated
 using (public.is_workspace_member(workspace_id));
 
-create policy "content_assets_insert_editors"
-on public.content_assets
+create policy "marqos_content_assets_insert_editors"
+on public.marqos_content_assets
 for insert
 to authenticated
 with check (public.is_workspace_editor(workspace_id));
 
-create policy "content_assets_update_editors"
-on public.content_assets
+create policy "marqos_content_assets_update_editors"
+on public.marqos_content_assets
 for update
 to authenticated
 using (public.is_workspace_editor(workspace_id))
 with check (public.is_workspace_editor(workspace_id));
 
-create policy "content_assets_delete_editors"
-on public.content_assets
+create policy "marqos_content_assets_delete_editors"
+on public.marqos_content_assets
 for delete
 to authenticated
 using (public.is_workspace_editor(workspace_id));
@@ -474,11 +483,11 @@ grant select, insert, update, delete on public.content_versions to service_role;
 grant select, insert, update on public.content_variants to authenticated;
 grant select, insert, update, delete on public.content_variants to service_role;
 
-grant select, insert, update on public.assets to authenticated;
-grant select, insert, update, delete on public.assets to service_role;
+grant select, insert, update on public.marqos_assets to authenticated;
+grant select, insert, update, delete on public.marqos_assets to service_role;
 
-grant select, insert, update, delete on public.content_assets to authenticated;
-grant select, insert, update, delete on public.content_assets to service_role;
+grant select, insert, update, delete on public.marqos_content_assets to authenticated;
+grant select, insert, update, delete on public.marqos_content_assets to service_role;
 
 grant select, insert on public.content_approvals to authenticated;
 grant select, insert, update, delete on public.content_approvals to service_role;

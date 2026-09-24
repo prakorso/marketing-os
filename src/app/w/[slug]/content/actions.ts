@@ -11,6 +11,8 @@ import {
   createContentVariant,
   createContentVersion,
   detachAsset,
+  generateContentVersionFromBrief,
+  generateImageAssetFromBrief,
   updateContentBrief,
   updateContentStatus,
   updateContentVariant,
@@ -80,6 +82,8 @@ export async function createContentBriefAction(formData: FormData) {
     coreMessage: String(formData.get("core_message") ?? "").trim() || undefined,
     cta: String(formData.get("cta") ?? "").trim() || undefined,
     format: String(formData.get("format") ?? "").trim() || undefined,
+    opportunityId: String(formData.get("opportunity_id") ?? "").trim() || undefined,
+    creativeDirection: String(formData.get("creative_direction") ?? "").trim() || undefined,
   });
 
   if (contentId) {
@@ -102,6 +106,14 @@ export async function updateContentBriefAction(formData: FormData) {
     coreMessage: String(formData.get("core_message") ?? "").trim(),
     cta: String(formData.get("cta") ?? "").trim(),
     format: String(formData.get("format") ?? "").trim(),
+    // Empty string (the form's "None" option) clears the relationship;
+    // this field is always submitted, so opportunityId is never undefined
+    // here, matching updateContentBrief's "always touch" update semantics.
+    opportunityId: String(formData.get("opportunity_id") ?? "").trim(),
+    // MVP-5.5: wires up content_briefs.creative_direction (see
+    // ContentBriefInput's doc comment). Same "always touch" semantics as
+    // the other text fields above — empty string clears it.
+    creativeDirection: String(formData.get("creative_direction") ?? "").trim(),
   });
 
   redirect(`/w/${slug}/content/${contentId}`);
@@ -120,6 +132,53 @@ export async function createContentVersionAction(formData: FormData) {
     generationMethod: String(formData.get("generation_method") ?? "human").trim() || "human",
     payloadText,
   });
+
+  redirect(`/w/${slug}/content/${contentId}`);
+}
+
+/**
+ * MVP-5.4: triggers real AI text generation via
+ * generateContentVersionFromBrief (Content Application Service -> AI
+ * Service -> AI Provider Interface -> OpenAI Provider Adapter). On failure
+ * (no active prompt, provider error, etc.) the error is surfaced via a
+ * query param rather than crashing to Next's generic error boundary — the
+ * smallest surface that lets the page render an explicit failure state
+ * (see ContentDetailPage). No fallback content is ever created on failure.
+ */
+export async function generateContentVersionWithAiAction(formData: FormData) {
+  const slug = String(formData.get("slug") ?? "");
+  const contentId = String(formData.get("content_id") ?? "");
+
+  const workspace = await resolveWorkspaceOrThrow(slug);
+  try {
+    await generateContentVersionFromBrief(workspace.id, contentId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "AI generation failed";
+    redirect(`/w/${slug}/content/${contentId}?ai_error=${encodeURIComponent(message)}`);
+  }
+
+  redirect(`/w/${slug}/content/${contentId}`);
+}
+
+/**
+ * MVP-5.5: triggers real AI image generation via generateImageAssetFromBrief
+ * (Content Application Service -> AI Service -> AI Provider Interface ->
+ * OpenAI Provider Adapter -> Asset Storage -> content_assets). Mirrors
+ * generateContentVersionWithAiAction's failure-surfacing pattern exactly,
+ * using a distinct query param so the page can tell which generation type
+ * failed. No fallback image is ever created on failure.
+ */
+export async function generateImageAssetWithAiAction(formData: FormData) {
+  const slug = String(formData.get("slug") ?? "");
+  const contentId = String(formData.get("content_id") ?? "");
+
+  const workspace = await resolveWorkspaceOrThrow(slug);
+  try {
+    await generateImageAssetFromBrief(workspace.id, contentId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "AI image generation failed";
+    redirect(`/w/${slug}/content/${contentId}?ai_image_error=${encodeURIComponent(message)}`);
+  }
 
   redirect(`/w/${slug}/content/${contentId}`);
 }

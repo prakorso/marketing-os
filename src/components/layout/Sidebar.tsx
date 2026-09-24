@@ -42,6 +42,9 @@ export function Sidebar({ workspaceName, workspaceSlug }: SidebarProps) {
   const isAssets = pathname === `${base}/assets` || pathname?.startsWith(`${base}/assets/`);
   const isContent = pathname === `${base}/content` || pathname?.startsWith(`${base}/content/`);
   const isSettings = pathname === `${base}/settings` || pathname?.startsWith(`${base}/settings/`);
+  const isCalendar = pathname === `${base}/calendar` || pathname?.startsWith(`${base}/calendar/`);
+  const isIntelligence = pathname === `${base}/intelligence` || pathname?.startsWith(`${base}/intelligence/`);
+  const isAnalytics = pathname === `${base}/analytics` || pathname?.startsWith(`${base}/analytics/`);
 
   return (
     <aside className="fixed inset-y-0 left-0 z-30 flex w-64 shrink-0 flex-col justify-between border-r border-outline-variant bg-surface-container-lowest">
@@ -71,15 +74,30 @@ export function Sidebar({ workspaceName, workspaceSlug }: SidebarProps) {
 
         <nav className="flex flex-col gap-space-xs px-space-lg">
           <NavItem label="Command Center" icon={CommandCenterIcon} href={base} active={isCommandCenter} />
-          <NavItem label="Intelligence" icon={IntelligenceIcon} />
+          <NavItem
+            label="Intelligence"
+            icon={IntelligenceIcon}
+            href={`${base}/intelligence`}
+            active={isIntelligence}
+          />
           <NavItem
             label="Content Studio"
             icon={ContentStudioIcon}
             href={`${base}/content`}
             active={isContent}
           />
-          <NavItem label="Content Calendar" icon={CalendarIcon} />
-          <NavItem label="Social Analytics" icon={AnalyticsIcon} />
+          <NavItem
+            label="Content Calendar"
+            icon={CalendarIcon}
+            href={`${base}/calendar`}
+            active={isCalendar}
+          />
+          <NavItem
+            label="Social Analytics"
+            icon={AnalyticsIcon}
+            href={`${base}/analytics`}
+            active={isAnalytics}
+          />
           <NavItem label="Campaigns" icon={CampaignsIcon} />
           <NavItem label="Performance Marketing" icon={PerformanceIcon} />
           <NavItem label="Assets" icon={AssetsIcon} href={`${base}/assets`} active={isAssets} />

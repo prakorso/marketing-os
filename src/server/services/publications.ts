@@ -2,7 +2,9 @@ import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { CALENDAR_PUBLICATION_STATUSES, type CalendarPublicationStatus } from "@/components/calendar/types";
 import { createClient } from "@/lib/supabase/server";
+import { notifyPublicationFailed } from "@/server/services/notifications";
 import { getCurrentUserRole } from "@/server/services/workspaces";
 import type { ContentApprovalStatus, Database, Publication } from "@/types/database";
 
@@ -13,12 +15,20 @@ import type { ContentApprovalStatus, Database, Publication } from "@/types/datab
  * still unspecified by canonical docs — deferred, not invented).
  *
  * Uses only the normal RLS-scoped Supabase client
- * (src/lib/supabase/server.ts) — publications carry no credentials
- * themselves, so there is no reason to reach for the service-role client
- * anywhere in this module. Credential resolution (Vault) lives entirely in
+ * (src/lib/supabase/server.ts) for every publications-row read/write —
+ * publications carry no credentials themselves, so there is no reason to
+ * reach for the service-role client for that purpose anywhere in this
+ * module. Credential resolution (Vault) lives entirely in
  * src/server/services/publication-execution.ts, narrowly scoped to the one
  * moment a credential is needed immediately before a provider call —
  * never here.
+ *
+ * MVP-2.6 adds one narrow exception: markFailed/markFailedAsSystem create a
+ * `publication_failed` notification as a side effect of a successful
+ * failure transition, via notifications.ts's notifyPublicationFailed(),
+ * which uses the service-role client only for that one notification insert
+ * (see notifications.ts's module comment for why). This does not change
+ * how the publications row itself is read or written.
  *
  * markPublishing/markPublished/markFailed rely on the database as the
  * authoritative source-state enforcement layer
@@ -87,6 +97,72 @@ export async function listPublicationsForWorkspace(workspaceId: string): Promise
 
   if (error) {
     throw new Error(`Failed to list publications: ${error.message}`);
+  }
+  return data ?? [];
+}
+
+/**
+ * The exact status set MVP-2.5 (Calendar) locks: a publication only has a
+ * calendar position once it has passed through scheduling, so draft/
+ * approved (which normally carry a NULL scheduled_at) are excluded by
+ * design — not merely by the range filter below, but as a deliberate
+ * product decision (approved MVP-2.5 scope). This is display scope only;
+ * it does not change the publication_status enum, lifecycle triggers, or
+ * approval/cancellation rules.
+ *
+ * Defined in src/components/calendar/types.ts (a plain, guard-free file)
+ * rather than here, and re-exported below for convenience — client
+ * calendar components need this exact runtime array to render filter
+ * options, and importing any runtime value from this server-only-guarded
+ * module would poison the client bundle even for an unrelated export
+ * (confirmed by `npm run build` before this fix). See that file's comment
+ * for the full reasoning. Calendar UI code imports the constant from
+ * @/components/calendar/types directly, never from here.
+ */
+export { CALENDAR_PUBLICATION_STATUSES, type CalendarPublicationStatus };
+
+export type ListPublicationsForCalendarFilters = {
+  /** Inclusive ISO instant — half-open range [start, end). */
+  start: string;
+  /** Exclusive ISO instant — half-open range [start, end). */
+  end: string;
+  /** Defaults to the full CALENDAR_PUBLICATION_STATUSES set; never widened beyond it. */
+  statuses?: CalendarPublicationStatus[];
+};
+
+/**
+ * Publications with a calendar position in [start, end), i.e. Database
+ * Architecture §18's (workspace_id, scheduled_at) index applied as a
+ * half-open range query. `scheduled_at IS NULL` rows (draft/approved) are
+ * excluded naturally — a NULL never satisfies `>= start` — with no
+ * separate NULL check needed. Returns plain Publication rows only, per
+ * the established convention (content/variant/account context is merged
+ * by the caller — see src/app/w/[slug]/calendar/page.tsx — mirroring
+ * listContentForWorkspace/listLinkedAssets' separate-query pattern rather
+ * than introducing a new joined-fetch abstraction here).
+ */
+export async function listPublicationsForCalendar(
+  workspaceId: string,
+  filters: ListPublicationsForCalendarFilters,
+): Promise<Publication[]> {
+  const supabase = await createClient();
+
+  const statuses =
+    filters.statuses && filters.statuses.length > 0
+      ? filters.statuses.filter((status) => (CALENDAR_PUBLICATION_STATUSES as readonly string[]).includes(status))
+      : [...CALENDAR_PUBLICATION_STATUSES];
+
+  const { data, error } = await supabase
+    .from("publications")
+    .select("*")
+    .eq("workspace_id", workspaceId)
+    .gte("scheduled_at", filters.start)
+    .lt("scheduled_at", filters.end)
+    .in("status", statuses)
+    .order("scheduled_at", { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to list publications for calendar: ${error.message}`);
   }
   return data ?? [];
 }
@@ -188,11 +264,37 @@ export async function createPublication(workspaceId: string, input: CreatePublic
 }
 
 /**
+ * MVP-5.35B scheduling guard (service-layer parity with the
+ * enforce_publication_scheduling_transitions trigger): a publication may
+ * (re-)enter 'scheduled' only from draft, approved, scheduled
+ * (reschedule), or failed when the failed attempt's remote outcome is
+ * certain. Never from published/publishing/cancelled — re-executing those
+ * could post the same content twice (MVP-5.35A hazard H2).
+ */
+export const PUBLISH_OUTCOME_UNKNOWN_ERROR_CODE = "publish_outcome_unknown";
+
+function assertSchedulable(publication: Pick<Publication, "id" | "status" | "error_code">) {
+  if (publication.status === "draft" || publication.status === "approved" || publication.status === "scheduled") {
+    return;
+  }
+  if (publication.status === "failed") {
+    if (publication.error_code === PUBLISH_OUTCOME_UNKNOWN_ERROR_CODE) {
+      throw new Error(
+        "This publication's previous publish outcome is unknown and must be reconciled before it can be rescheduled",
+      );
+    }
+    return;
+  }
+  throw new Error(`A publication with status '${publication.status}' cannot be scheduled`);
+}
+
+/**
  * Transitions a publication to 'scheduled'. Performs the same
  * latest-approval-wins check the database trigger enforces
  * (defense-in-depth — Database Architecture §17 requires both layers);
  * the trigger remains authoritative even if this check is somehow
- * bypassed or made inconsistent with it in the future.
+ * bypassed or made inconsistent with it in the future. The same applies to
+ * the MVP-5.35B source-state guard (assertSchedulable / open attempts).
  */
 export async function schedulePublication(
   workspaceId: string,
@@ -205,7 +307,7 @@ export async function schedulePublication(
 
   const { data: publication, error: fetchError } = await supabase
     .from("publications")
-    .select("id, content_variant_id")
+    .select("id, content_variant_id, status, error_code")
     .eq("workspace_id", workspaceId)
     .eq("id", publicationId)
     .maybeSingle();
@@ -214,6 +316,21 @@ export async function schedulePublication(
   }
   if (!publication) {
     throw new Error("Publication not found in this workspace");
+  }
+
+  assertSchedulable(publication);
+
+  const { count: openAttempts, error: attemptsError } = await supabase
+    .from("publication_attempts")
+    .select("id", { count: "exact", head: true })
+    .eq("workspace_id", workspaceId)
+    .eq("publication_id", publicationId)
+    .is("completed_at", null);
+  if (attemptsError) {
+    throw new Error(`Failed to check publish attempts: ${attemptsError.message}`);
+  }
+  if (openAttempts) {
+    throw new Error("This publication has a publish attempt still in progress and cannot be rescheduled");
   }
 
   const { data: variant, error: variantError } = await supabase
@@ -384,13 +501,41 @@ function failedFields(failure: MarkFailedInput): Database["public"]["Tables"]["p
   };
 }
 
+/**
+ * MVP-2.6 side effect of a successful failed-transition: create a
+ * `publication_failed` notification for the publication's creator. Called
+ * only after updatePublicationRow has already committed the transition, so
+ * a rejected/duplicate transition (e.g. failed → failed, rejected by
+ * enforce_publication_lifecycle_transitions before this point is ever
+ * reached) can never produce a duplicate notification. Deliberately does
+ * not propagate a notification-write failure: the failed-transition itself
+ * — the source of truth — has already succeeded by the time this runs, and
+ * a side effect must not be allowed to make that outcome look like it
+ * failed. Errors are swallowed and logged, not rethrown.
+ */
+async function notifyFailureSideEffect(publication: Publication, failure: MarkFailedInput): Promise<void> {
+  try {
+    await notifyPublicationFailed({
+      workspaceId: publication.workspace_id,
+      publicationId: publication.id,
+      recipientUserId: publication.created_by,
+      errorCode: failure.errorCode,
+      errorMessage: failure.errorMessage,
+    });
+  } catch (err) {
+    console.error(`Failed to create publication_failed notification for publication ${publication.id}:`, err);
+  }
+}
+
 export async function markFailed(
   workspaceId: string,
   publicationId: string,
   failure: MarkFailedInput,
 ): Promise<Publication> {
   await assertEditor(workspaceId);
-  return updatePublicationRow(await createClient(), workspaceId, publicationId, failedFields(failure));
+  const publication = await updatePublicationRow(await createClient(), workspaceId, publicationId, failedFields(failure));
+  await notifyFailureSideEffect(publication, failure);
+  return publication;
 }
 
 /** Trusted-system counterpart of markFailed — see module header comment. */
@@ -400,5 +545,7 @@ export async function markFailedAsSystem(
   publicationId: string,
   failure: MarkFailedInput,
 ): Promise<Publication> {
-  return updatePublicationRow(client, workspaceId, publicationId, failedFields(failure));
+  const publication = await updatePublicationRow(client, workspaceId, publicationId, failedFields(failure));
+  await notifyFailureSideEffect(publication, failure);
+  return publication;
 }
