@@ -120,7 +120,7 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
     variantId = variant.id;
 
     const { data: asset, error: assetError } = await marketer.client
-      .from("assets")
+      .from("marqos_assets")
       .insert({
         workspace_id: workspaceId,
         storage_path: `${workspaceId}/fixture.txt`,
@@ -411,20 +411,20 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
 
   describe("assets (archive semantics)", () => {
     it("allows a member to read an asset", async () => {
-      const { data, error } = await viewer.client.from("assets").select("*").eq("id", assetId).maybeSingle();
+      const { data, error } = await viewer.client.from("marqos_assets").select("*").eq("id", assetId).maybeSingle();
       expect(error).toBeNull();
       expect(data?.id).toBe(assetId);
     });
 
     it("hides assets from a non-member", async () => {
-      const { data, error } = await outsider.client.from("assets").select("*").eq("id", assetId).maybeSingle();
+      const { data, error } = await outsider.client.from("marqos_assets").select("*").eq("id", assetId).maybeSingle();
       expect(error).toBeNull();
       expect(data).toBeNull();
     });
 
     it("denies a viewer from inserting an asset", async () => {
       const { data, error } = await viewer.client
-        .from("assets")
+        .from("marqos_assets")
         .insert({
           workspace_id: workspaceId,
           storage_path: `${workspaceId}/viewer.txt`,
@@ -441,7 +441,7 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
     it("allows an editor to archive an asset via archived_at, not deletion", async () => {
       const now = new Date().toISOString();
       const { data, error } = await marketer.client
-        .from("assets")
+        .from("marqos_assets")
         .update({ archived_at: now })
         .eq("id", assetId)
         .select()
@@ -449,13 +449,13 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
       expect(error).toBeNull();
       expect(data?.archived_at).toBeTruthy();
 
-      const { data: stillThere } = await admin.from("assets").select("id").eq("id", assetId).single();
+      const { data: stillThere } = await admin.from("marqos_assets").select("id").eq("id", assetId).single();
       expect(stillThere?.id).toBe(assetId);
     });
 
     it("denies a viewer from updating an asset", async () => {
       const { data, error } = await viewer.client
-        .from("assets")
+        .from("marqos_assets")
         .update({ file_name: "hijacked.txt" })
         .eq("id", assetId)
         .select();
@@ -464,13 +464,13 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
     });
 
     it("has no DELETE grant/policy: assets are archive-only", async () => {
-      const { error } = await owner.client.from("assets").delete().eq("id", assetId).select();
+      const { error } = await owner.client.from("marqos_assets").delete().eq("id", assetId).select();
       expect(error).not.toBeNull();
     });
 
     it("rejects a cross-workspace brand_id via composite FK", async () => {
       const { data, error } = await outsider.client
-        .from("assets")
+        .from("marqos_assets")
         .insert({
           workspace_id: otherWorkspaceId,
           brand_id: brandId,
@@ -489,7 +489,7 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
   describe("content_assets (junction — tenant isolation)", () => {
     it("allows an editor to link an asset to content", async () => {
       const { data, error } = await marketer.client
-        .from("content_assets")
+        .from("marqos_content_assets")
         .insert({ content_id: contentId, asset_id: assetId, workspace_id: workspaceId, sort_order: 1 })
         .select()
         .single();
@@ -499,7 +499,7 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
 
     it("allows a member to read the link", async () => {
       const { data, error } = await viewer.client
-        .from("content_assets")
+        .from("marqos_content_assets")
         .select("*")
         .eq("content_id", contentId)
         .eq("asset_id", assetId)
@@ -510,7 +510,7 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
 
     it("hides the link from a non-member", async () => {
       const { data, error } = await outsider.client
-        .from("content_assets")
+        .from("marqos_content_assets")
         .select("*")
         .eq("content_id", contentId)
         .eq("asset_id", assetId)
@@ -521,7 +521,7 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
 
     it("denies a viewer from linking an asset", async () => {
       const { data, error } = await viewer.client
-        .from("content_assets")
+        .from("marqos_content_assets")
         .insert({ content_id: contentId, asset_id: assetId, workspace_id: workspaceId, sort_order: 2 })
         .select();
       expect(data).toBeNull();
@@ -530,7 +530,7 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
 
     it("rejects a cross-workspace pairing via composite FK on both content_id and asset_id", async () => {
       const { data, error } = await outsider.client
-        .from("content_assets")
+        .from("marqos_content_assets")
         .insert({ content_id: contentId, asset_id: assetId, workspace_id: otherWorkspaceId })
         .select();
       expect(data).toBeNull();
@@ -539,7 +539,7 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
 
     it("denies a non-member from unlinking an asset", async () => {
       const { data, error } = await outsider.client
-        .from("content_assets")
+        .from("marqos_content_assets")
         .delete()
         .eq("content_id", contentId)
         .eq("asset_id", assetId)
@@ -550,7 +550,7 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
 
     it("allows an editor to unlink an asset (removes the association, not the asset)", async () => {
       const { data, error } = await marketer.client
-        .from("content_assets")
+        .from("marqos_content_assets")
         .delete()
         .eq("content_id", contentId)
         .eq("asset_id", assetId)
@@ -558,7 +558,7 @@ describe.skipIf(!hasLocalSupabase)("Content domain RLS — tenant isolation", ()
       expect(error).toBeNull();
       expect(data).toHaveLength(1);
 
-      const { data: assetStillThere } = await admin.from("assets").select("id").eq("id", assetId).single();
+      const { data: assetStillThere } = await admin.from("marqos_assets").select("id").eq("id", assetId).single();
       expect(assetStillThere?.id).toBe(assetId);
     });
   });

@@ -8,5 +8,17 @@ node_modules/
 *.log
 *.tsbuildinfo
 
+# MVP-5.17: sanitized real-provider evidence captures (real account IDs,
+# media permalinks, real engagement numbers) — never committed, even
+# redacted of credentials.
+evidence/
+
+# Ruflo coordination state (Claude <-> Codex handoffs); local only.
+.swarm/
+.claude-flow/
+agentdb.rvf
+agentdb.rvf.lock
+ruvector.db
+
 # Claude <-> Codex coordination task files (turn state); local only.
 .marqos/coordination/

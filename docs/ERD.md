@@ -52,15 +52,22 @@ diverge from the parent brand's workspace.
 
 ```text
 workspaces
-    ├── 1:N → signal_sources → 1:N → signals
+    ├── 1:N → marqos_signal_sources → 1:N → marqos_signals
     ├── 1:N → topics
     └── 1:N → opportunities
 
-signals N:M topics through signal_topics (workspace_id direct on the junction)
+marqos_signals N:M topics through signal_topics (workspace_id direct on the junction)
 
 topics 1:N opportunities
 brands 1:N opportunities
 ```
+
+`marqos_signal_sources`/`marqos_signals` are prefixed, not named
+`signal_sources`/`signals` (MVP-5.24/MVP-5.25 owner decision): the hosted
+Supabase project also contains a differently-shaped, pre-existing table
+pair of those names belonging to a separate application sharing the
+project. `topics`/`signal_topics`/`opportunities` do not collide and keep
+their original names.
 
 Topic grouping (signal → topic) is achieved via AI/provider classification
 plus the relational `signal_topics` junction. No vector/embedding entity
@@ -115,18 +122,41 @@ its immediate parent (Database Architecture §16).
 content ──── brands (N:1, composite-FK tenant-checked)
    │ N:M
    ▼
-content_assets (workspace_id direct on the junction)
+marqos_content_assets (workspace_id direct on the junction)
    ▲
    │ N:M
-assets ──── ai_jobs (N:1 optional, composite-FK tenant-checked)
+marqos_assets ──── ai_jobs (N:1 optional, composite-FK tenant-checked)
    │
    └── brands (N:1 optional, composite-FK tenant-checked)
 ```
 
-For carousels, `content_assets.sort_order` controls slide order.
-`assets.ai_job_id` traces AI-generated assets (e.g. AI image generation
-output) back to the producing job; `NULL` for uploaded/human-sourced
-assets.
+`marqos_assets`/`marqos_content_assets` are prefixed, not named
+`assets`/`content_assets` (MVP-5.24/MVP-5.25 owner decision): the hosted
+Supabase project also contains a differently-shaped, pre-existing table
+pair of those names belonging to a separate application sharing the
+project. The `assets` Storage bucket (Foundation) is unaffected and keeps
+its original name — it is a different namespace from the database table.
+
+`marqos_content_assets` is the content-level asset library. The exact,
+ordered media a *publication* of a variant publishes is selected at variant
+level (MVP-5.35B, Decision #43):
+
+```text
+content_variants
+      ↓
+marqos_content_variant_assets (workspace_id direct on the junction)
+      ↓
+marqos_assets
+```
+
+`marqos_content_variant_assets.sort_order` is the publish order (carousel
+slide order when carousels are implemented; `0` for a single image) and is
+unique per variant; the same asset appears at most once per variant.
+Composite FKs to `content_variants (id, workspace_id)` and
+`marqos_assets (id, workspace_id)`. Content-level bindings are unaffected.
+`marqos_assets.ai_job_id` traces AI-generated assets (e.g. AI image
+generation output) back to the producing job; `NULL` for uploaded/
+human-sourced assets.
 
 ## 8. Approval ERD
 
@@ -163,6 +193,21 @@ hard-deleted.
 `social_accounts.vault_secret_id` references a Supabase Vault secret; no
 raw credential is stored in the relational schema (Database Architecture
 §8).
+
+### 9b. Publication Attempts (provider checkpoint)
+
+```text
+publications
+      ↓
+publication_attempts
+```
+
+One `publications` row has 0..N `publication_attempts` (MVP-5.35B,
+Decision #43), numbered 1, 2, 3… per publication, with at most one
+non-terminal attempt at a time. Provider progress (container ids, remote
+media id) lives here; the MARQOS lifecycle stays in `publications.status`.
+Composite FK to `publications (id, workspace_id)`. Attempts are an
+append/audit record (no hard delete; terminal attempts immutable).
 
 ### 9a. Publication Approval Gate
 
@@ -227,7 +272,7 @@ populated per row (CHECK constraint):
 
 ```text
 insight_evidence → exactly one of:
-    signals
+    marqos_signals
     topics
     opportunities
     content
@@ -245,24 +290,31 @@ workspaces
     │ 1:N
     ▼
 ai_jobs ──── automation_runs (N:1 optional, composite-FK tenant-checked)
-    │ 1:N
-    ▼
-ai_usage
-
-prompt_versions
-    └── referenced by AI execution metadata
-        (resolution: workspace-specific active > global active)
+    ├── 1:N
+    │   ▼
+    │   ai_usage
+    └── N:1 optional → prompt_versions (plain FK, not composite-FK-checked —
+        prompt_versions.workspace_id is nullable for global prompts;
+        resolution: workspace-specific active > global active)
 
 content_versions ◄── ai_jobs (N:1 optional)
-assets            ◄── ai_jobs (N:1 optional)
+marqos_assets     ◄── ai_jobs (N:1 optional)
 ```
 
 `ai_jobs.trigger_type` (`user` | `automation` | `system`) identifies the
 origin of every execution. `requested_by` is populated for `user`;
 `automation_run_id` is populated for `automation`. Structured, closed
 foreign keys are used in place of an unrestricted polymorphic graph:
-`ai_jobs` links forward to `content_versions`/`assets` via those tables'
-`ai_job_id` columns, not via a generic reference on `ai_jobs` itself.
+`ai_jobs` links forward to `content_versions`/`marqos_assets` via those
+tables' `ai_job_id` columns, not via a generic reference on `ai_jobs`
+itself.
+
+`ai_jobs.prompt_version_id` is a plain, optional forward link to the
+`prompt_versions` row that produced the job's request (Database
+Architecture §10, DECISIONS #26). It is deliberately excluded from the
+composite tenant-consistency FK pattern (§16) because a global prompt
+(`prompt_versions.workspace_id IS NULL`) has no single workspace to check
+against.
 
 ## 14. Automation ERD
 
@@ -354,14 +406,14 @@ profiles, workspaces, workspace_members
 brands, brand_identity, brand_voice, audience_profiles, content_pillars
 
 ### Intelligence
-signal_sources, signals, topics, signal_topics, opportunities
+marqos_signal_sources, marqos_signals, topics, signal_topics, opportunities
 
 ### Content
-content_briefs, content, content_versions, content_variants, assets,
-content_assets, content_approvals
+content_briefs, content, content_versions, content_variants, marqos_assets,
+marqos_content_assets, marqos_content_variant_assets, content_approvals
 
 ### Distribution
-social_accounts, publications
+social_accounts, publications, publication_attempts
 
 ### Analytics
 publication_metric_snapshots, content_performance_scores
@@ -392,9 +444,9 @@ all changes are new columns/constraints on existing entities.
 | brands → brand_voice | 1:1 (+ workspace_id composite FK) |
 | brands → audience_profiles | 1:N (+ workspace_id composite FK) |
 | brands → content_pillars | 1:N (+ workspace_id composite FK) |
-| workspaces → signal_sources | 1:N |
-| signal_sources → signals | 1:N |
-| signals ↔ topics | N:M via signal_topics (workspace_id direct on junction) |
+| workspaces → marqos_signal_sources | 1:N |
+| marqos_signal_sources → marqos_signals | 1:N |
+| marqos_signals ↔ topics | N:M via signal_topics (workspace_id direct on junction) |
 | topics → opportunities | 1:N |
 | brands → opportunities | 1:N |
 | opportunities → content_briefs | 1:N |
@@ -404,20 +456,22 @@ all changes are new columns/constraints on existing entities.
 | content → content_versions | 1:N |
 | ai_jobs → content_versions | 1:N optional (composite-FK tenant-checked) |
 | content_versions → content_variants | 1:N |
-| content ↔ assets | N:M via content_assets (workspace_id direct on junction) |
-| brands → assets | 1:N optional (composite-FK tenant-checked) |
-| ai_jobs → assets | 1:N optional (composite-FK tenant-checked) |
+| content ↔ marqos_assets | N:M via marqos_content_assets (workspace_id direct on junction) |
+| content_variants ↔ marqos_assets | N:M ordered via marqos_content_variant_assets (workspace_id direct on junction; publish selection) |
+| brands → marqos_assets | 1:N optional (composite-FK tenant-checked) |
+| ai_jobs → marqos_assets | 1:N optional (composite-FK tenant-checked) |
 | content → content_approvals | 1:N |
 | content_versions → content_approvals | 1:N optional |
 | brands → social_accounts | 1:N |
 | content_variants → publications | 1:N |
+| publications → publication_attempts | 1:N (≤1 non-terminal) |
 | social_accounts → publications | 1:N |
 | publications → publication_metric_snapshots | 1:N |
 | publications → content_performance_scores | 1:N optional (score_scope = publication) |
 | content → content_performance_scores | 1:N optional (score_scope = content) |
 | insights → insight_evidence | 1:N |
 | brands → insights | 1:N optional (composite-FK tenant-checked) |
-| signals → insight_evidence | 1:N optional (exactly-one-of-six CHECK) |
+| marqos_signals → insight_evidence | 1:N optional (exactly-one-of-six CHECK) |
 | topics → insight_evidence | 1:N optional (exactly-one-of-six CHECK) |
 | opportunities → insight_evidence | 1:N optional (exactly-one-of-six CHECK) |
 | content → insight_evidence | 1:N optional (exactly-one-of-six CHECK) |
@@ -426,6 +480,7 @@ all changes are new columns/constraints on existing entities.
 | insights → recommendations | 1:N |
 | workspaces → ai_jobs | 1:N |
 | ai_jobs → ai_usage | 1:N |
+| prompt_versions → ai_jobs | 1:N optional (plain FK, not composite — prompt_versions may be global) |
 | automation_runs → ai_jobs | 1:N optional (composite-FK tenant-checked) |
 | workspaces → automations | 1:N |
 | automations → automation_runs | 1:N |

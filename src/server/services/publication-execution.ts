@@ -4,8 +4,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
-import { ProviderError } from "@/lib/social/provider";
+import { isStagedMediaPublisher, ProviderError, type ProviderPublishResult } from "@/lib/social/provider";
 import { resolveProviderAdapter } from "@/lib/social/registry";
+import { createAttemptStore, runStagedImagePublish } from "@/server/services/instagram-image-publishing";
+import { createPublishSignedUrl, loadVariantPublishAssets } from "@/server/services/publication-media";
+import { ExecutionDeadline } from "@/server/services/publish-execution-budget";
 import {
   markFailed,
   markFailedAsSystem,
@@ -82,6 +85,9 @@ async function runExecution(
   markPublishedFn: MarkPublishedFn,
   markFailedFn: MarkFailedFn,
 ): Promise<Publication> {
+  // MVP-5.35C-D: the execution budget starts here so load/Vault time counts
+  // against the 45 s application budget (60 s platform limit).
+  const deadline = new ExecutionDeadline();
   const supabase = client;
 
   const { data: publication, error: publicationError } = await supabase
@@ -143,27 +149,100 @@ async function runExecution(
     await markPublishingFn(workspaceId, publicationId);
   }
 
-  const adapter = resolveProviderAdapter(socialAccount.platform);
+  const adapter = resolveProviderAdapter(socialAccount);
 
+  // MVP-5.35C-B: staged (checkpointed) publishing for providers with an
+  // irreversible multi-step publish. Explicitly gated: with the gate off the
+  // Instagram adapter's generic publish() keeps failing as not_implemented,
+  // so no deployed path can reach media_publish until it is enabled.
+  if (isStagedMediaPublisher(adapter) && isInstagramStagedPublishingEnabled()) {
+    const service = createServiceRoleClient();
+    await runStagedImagePublish(
+      { workspaceId, publication, variant, socialAccount, credential },
+      {
+        provider: adapter,
+        attempts: createAttemptStore(service),
+        loadAssets: (wsId, variantId) => loadVariantPublishAssets(service, wsId, variantId),
+        signMediaUrl: createPublishSignedUrl,
+        markPublished: (result) => markPublishedFn(workspaceId, publicationId, result),
+        markFailed: (failure) => markFailedFn(workspaceId, publicationId, failure),
+        deadline,
+      },
+    );
+    return loadPublication(client, workspaceId, publicationId);
+  }
+
+  return executeProviderPublishSafely({
+    publish: () =>
+      adapter.publish({
+        credential,
+        idempotencyKey: publication.idempotency_key,
+        variant,
+        socialAccount,
+      }),
+    persistPublished: (result) => markPublishedFn(workspaceId, publicationId, result),
+    persistFailed: (failure) => markFailedFn(workspaceId, publicationId, failure),
+  });
+}
+
+/** Server-side enablement gate for staged Instagram publishing (off unless explicitly "enabled"). */
+export function isInstagramStagedPublishingEnabled(): boolean {
+  return process.env.MARQOS_INSTAGRAM_STAGED_PUBLISHING === "enabled";
+}
+
+async function loadPublication(client: SupabaseClient<Database>, workspaceId: string, publicationId: string): Promise<Publication> {
+  const { data, error } = await client.from("publications").select("*").eq("workspace_id", workspaceId).eq("id", publicationId).single();
+  if (error || !data) {
+    throw new Error(`Failed to reload publication: ${error?.message ?? "not found"}`);
+  }
+  return data;
+}
+
+/** Raised when a provider publish SUCCEEDED but the local published write could not be persisted. */
+export class PublishedPersistenceError extends Error {
+  constructor(readonly result: ProviderPublishResult) {
+    super("Provider publish succeeded but the published state could not be persisted; reconciliation required");
+    this.name = "PublishedPersistenceError";
+  }
+}
+
+/**
+ * MVP-5.35C-B H1 fix (generic single-shot providers): the provider call and
+ * the local published write have SEPARATE error boundaries. A provider
+ * failure → persistFailed. A provider SUCCESS followed by a local write
+ * failure → bounded retries of the idempotent local write only, then
+ * PublishedPersistenceError — never persistFailed, never a provider retry.
+ */
+export async function executeProviderPublishSafely(params: {
+  publish: () => Promise<ProviderPublishResult>;
+  persistPublished: (result: ProviderPublishResult) => Promise<Publication>;
+  persistFailed: (failure: { errorCode: string; errorMessage: string; providerResponse: Record<string, unknown> }) => Promise<Publication>;
+  retries?: number;
+}): Promise<Publication> {
+  let result: ProviderPublishResult;
   try {
-    const result = await adapter.publish({
-      credential,
-      idempotencyKey: publication.idempotency_key,
-      variant,
-      socialAccount,
-    });
-    return await markPublishedFn(workspaceId, publicationId, result);
+    result = await params.publish();
   } catch (err) {
     const providerError =
       err instanceof ProviderError
         ? err
         : new ProviderError(err instanceof Error ? err.message : "Unknown provider error", "unknown");
-    return await markFailedFn(workspaceId, publicationId, {
+    return params.persistFailed({
       errorCode: providerError.code,
       errorMessage: providerError.message,
       providerResponse: providerError.providerResponse,
     });
   }
+
+  const retries = params.retries ?? 3;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      return await params.persistPublished(result);
+    } catch {
+      if (attempt === retries) break;
+    }
+  }
+  throw new PublishedPersistenceError(result);
 }
 
 /**

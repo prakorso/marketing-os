@@ -1,12 +1,32 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-import type { Database } from "@/types/database";
+import { CANONICAL_METRICS, type CanonicalMetric, type Database, type MetricStates } from "@/types/database";
 
 export const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 export const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 export const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export const hasLocalSupabase = Boolean(supabaseUrl && anonKey && serviceRoleKey);
+
+/**
+ * MVP-5.10E: publication_metric_snapshots.metric_states is NOT NULL and
+ * CHECK-validated (validate_publication_metric_states) — a "reported"
+ * metric requires a non-null value in its own column; everything else
+ * requires null there. RLS/CHECK/ordering tests in this suite raw-insert
+ * snapshot rows directly (not through recordPublicationMetricSnapshot,
+ * which builds this from a NormalizedObservation) and only care about a
+ * subset of metrics, so they use this to mark exactly the metrics they
+ * supply a value for as "reported" and everything else as "unavailable" —
+ * a neutral, valid state for metrics the test doesn't exercise, not a
+ * claim about real provider capability (Decision #42).
+ */
+export function metricStatesFixture(reportedMetrics: readonly CanonicalMetric[]): MetricStates {
+  const states = {} as MetricStates;
+  for (const metric of CANONICAL_METRICS) {
+    states[metric] = { state: reportedMetrics.includes(metric) ? "reported" : "unavailable" };
+  }
+  return states;
+}
 
 export function serviceRoleClient(): SupabaseClient<Database> {
   if (!supabaseUrl || !serviceRoleKey) {

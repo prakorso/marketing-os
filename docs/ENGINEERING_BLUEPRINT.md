@@ -209,7 +209,7 @@ Slide 3
 Slide N
 ```
 
-Ordering is deterministic and should not require platform-specific core models.
+Ordering is deterministic and should not require platform-specific core models. The ordered assets are bound to the variant explicitly (`marqos_content_variant_assets`, Decision #43); content-level assets (`marqos_content_assets`) are a library and are never implicitly published. Carousel publishing itself is deferred until after the image-first slice.
 
 ## 15. Asset Storage
 
@@ -232,6 +232,8 @@ Each adapter handles authentication/credential handling, publishing, scheduling 
 
 **Credential storage:** social platform OAuth access/refresh tokens and API keys are stored exclusively in **Supabase Vault**, never in an ordinary application table or column. `social_accounts` stores only a `vault_secret_id` reference plus non-secret metadata. Vault is read and written only from server-side code (server components, route handlers, job workers) using the service role; adapters resolve the live credential immediately before a provider call and never return it to client/browser code. This is the concrete mechanism behind "secrets are never exposed to the browser" (§11) as applied to third-party credentials, not just first-party API keys.
 
+**Publishing idempotency and provider progress (Decision #43):** providers such as Instagram expose a multi-step publish (container → readiness → publish) with no provider-side idempotency key, so MARQOS owns idempotency: single-flight via the lifecycle triggers and the scheduler claim, a per-attempt provider checkpoint (`publication_attempts`) separate from the MARQOS lifecycle, and an explicit *unknown outcome* (`publish_outcome_unknown`) when a publish request may have succeeded remotely without confirmation — such a publication is never automatically retried or rescheduled until reconciled. Provider container states never become `publication_status` values. The first Instagram publishing slice supports a single eligible JPEG image per publication; carousel and Reel publishing, media conversion, and background video polling are deferred.
+
 ## 17. Publication Lifecycle
 
 ```text
@@ -239,7 +241,7 @@ draft → approved → scheduled → publishing → published
                                       └────→ failed
 ```
 
-Cancellation is available from appropriate pre-publication states. Provider limitations are represented explicitly.
+Cancellation is available from appropriate pre-publication states. Provider limitations are represented explicitly. A publication may re-enter `scheduled` only from `draft`, `approved`, `scheduled` (reschedule) or a `failed` state whose remote outcome is certain — never from `published`, `publishing` or `cancelled`, and never while a publish attempt is open (service check + database trigger, Database Architecture §8). `published_at` records the MARQOS time of the published transition.
 
 **Approval gate:** a publication may not enter `scheduled`, `publishing`, or `published` unless an approved `content_approvals` record exists for the specific `content_version_id` behind its content variant. This is checked both by the application service performing the transition and by a database trigger on `publications` (Database Architecture §17), so the rule holds even against direct database access. `content.status` is a UI rollup only — it is never read as the authorization source for this gate. This resolves the previously undocumented relationship between `content.status`, `content_approvals`, `content_variants.status`, and `publications.status`: each has a distinct responsibility (creative rollup, authoritative approval record, variant readiness, distribution lifecycle, respectively), and only `content_approvals` gates publishing.
 
@@ -257,9 +259,15 @@ Derived Score
 Insight
 ```
 
-Raw provider metrics and normalized/derived metrics are conceptually separate. Historical snapshots are preserved.
+Raw provider metrics and normalized/derived metrics are conceptually separate. Historical snapshots are preserved. Normalization (translating a provider's raw response into this normalized vocabulary) is a distinct conceptual stage, owned by the Analytics Normalizer (Decisions #29, #32) — not folded silently into the provider adapter.
 
 A Derived Score has an explicit `score_scope` (`publication` or `content`): a publication-scoped score evaluates one publication's metrics, a content-scoped score aggregates across that content's variants/publications. Exactly one of the corresponding foreign keys is set, matching the scope — this is a database constraint, not a convention (Database Architecture §9).
+
+The "Derived Score" stage above is this architecture's target state. The current MVP-3 implementation does not yet occupy it: `content_performance_scores` currently stores a provisional passthrough of the provider-reported `engagement_rate`, not a genuinely derived calculation (Decision #31). This diagram is not weakened by that — a genuinely derived Marqos performance score remains the intended future state of this stage.
+
+The pipeline above is refined, without changing its stages, by Decisions #37–#42: Provider → Provider Adapter → Raw Provider Response → Analytics Normalizer Dispatcher → Provider-specific Normalizer → Normalized Observation → Analytics Service → Metric Snapshot. Provider adapters return an unnormalized, provider-native raw response carrying a provider identity discriminant and an optional provider-reported observation timestamp (Decision #39); provider-specific normalizer modules, not the adapter, perform the translation into Marqos's normalized vocabulary and determine each metric's state, consulting a static, code-level provider capability declaration to distinguish "unsupported" from "unavailable" (Decisions #41, #42) — no per-account capability storage is introduced. A normalizer performs no network I/O and persists nothing; persistence remains the Analytics Service's responsibility.
+
+Per-metric state (reported / unsupported / unavailable, Decision #33) is carried as an additive JSONB structure alongside the existing normalized metric columns, not as a new relational table (Decision #37); the exact column, key, and enum shape remains an implementation detail for a future migration milestone. `captured_at` uses the provider's own observation time when available, falling back to Marqos's sync time only when the provider does not expose one, with knowable provenance distinguishing the two (Decision #38) — the physical provenance representation likewise remains an implementation detail. `social_accounts.last_synced_at` is written inside `recordPublicationMetricSnapshot`'s successful path, monotonically, covering both direct and batch-sync calls (Decision #40); this requires no schema change.
 
 ## 19. Intelligence Architecture
 

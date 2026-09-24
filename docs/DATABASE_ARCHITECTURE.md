@@ -84,7 +84,7 @@ Unique: `(workspace_id, user_id)`
 - `id`
 - `brand_id` unique FK
 - `workspace_id` — direct (denormalized; composite FK, §16)
-- `logo_asset_id` nullable FK → `assets.id` where dependency order permits
+- `logo_asset_id` nullable FK → `marqos_assets.id` where dependency order permits
 - `primary_colors` JSONB
 - `secondary_colors` JSONB
 - `typography` JSONB
@@ -130,7 +130,14 @@ Unique: `(workspace_id, user_id)`
 
 ## 4. Intelligence Domain
 
-### `signal_sources`
+Tables named `marqos_signal_sources`/`marqos_signals`, not
+`signal_sources`/`signals` (MVP-5.24/MVP-5.25 owner decision): the hosted
+Supabase project also contains a differently-shaped, pre-existing table
+pair of those names belonging to a separate application sharing the
+project. `topics`/`signal_topics`/`opportunities` do not collide and keep
+their original names.
+
+### `marqos_signal_sources`
 - `id`
 - `workspace_id`
 - `provider`
@@ -145,7 +152,7 @@ Secrets are not stored in ordinary configuration JSONB (see §8 for the
 credential pattern used for third-party access; the same principle applies
 to any source-level credentials).
 
-### `signals`
+### `marqos_signals`
 - `id`
 - `workspace_id`
 - `source_id`
@@ -301,7 +308,14 @@ never hard-deleted once a `publication` references them — see §19.
 
 ## 6. Asset Domain
 
-### `assets`
+Tables named `marqos_assets`/`marqos_content_assets`, not `assets`/
+`content_assets` (MVP-5.24/MVP-5.25 owner decision): the hosted Supabase
+project also contains a differently-shaped, pre-existing table pair of
+those names belonging to a separate application sharing the project. The
+`assets` Storage bucket (Foundation) is unaffected and keeps its original
+name — it is a different namespace from the database table.
+
+### `marqos_assets`
 - `id`
 - `workspace_id`
 - `brand_id` nullable
@@ -332,7 +346,7 @@ populated for AI-generated assets (e.g. AI image generation output) and
 left `NULL` for uploaded/human-sourced assets. When `brand_id` is set it is
 composite-FK-checked against `brands (id, workspace_id)`.
 
-### `content_assets`
+### `marqos_content_assets`
 - `content_id`
 - `asset_id`
 - `workspace_id` — direct (junction table; composite FKs, §16)
@@ -340,7 +354,26 @@ composite-FK-checked against `brands (id, workspace_id)`.
 - `sort_order`
 - `created_at`
 
-Allows asset reuse and deterministic carousel ordering.
+Content-level asset library: allows asset reuse and organization at the
+content (concept) level. It does not determine what a publication publishes.
+
+### `marqos_content_variant_assets`
+- `content_variant_id`
+- `asset_id`
+- `workspace_id` — direct (junction table; composite FKs, §16)
+- `sort_order` — required, `>= 0`
+- `created_by`
+- `created_at`
+
+Primary key `(content_variant_id, asset_id)`; `UNIQUE (content_variant_id,
+sort_order)`. The explicit, ordered selection of media that a publication of
+this variant publishes (MVP-5.35B, Decision #43) — deterministic at variant
+level because the publication target is the variant. Composite FKs to
+`content_variants (id, workspace_id)` and `marqos_assets (id, workspace_id)`
+reject cross-workspace bindings. RLS: members read, editors write (same as
+`marqos_content_assets`). A junction, not a historical record; what an
+attempt actually submitted is snapshotted in
+`publication_attempts.media_asset_ids`.
 
 ## 7. Approval Domain
 
@@ -383,6 +416,31 @@ to satisfy the Publication Approval Gate (§17). An approval without a
 
 `UNIQUE (id, workspace_id)` — supports composite FKs (§16).
 
+**`external_account_id` semantics (Model B, MVP-5.35B.3):** the
+provider-native identifier of the account MARQOS acts on — the id used in
+that provider's API paths and the natural key `(workspace_id, platform,
+external_account_id)`. For Instagram it is the professional account ID
+(`<IG_ID>`, `GET /me?fields=user_id`), obtained by a profile lookup that is
+part of establishing an Instagram connection (no account is written unless
+it succeeds). The OAuth token-exchange "Instagram-scoped user ID" and the
+`/me` app-scoped `id` are non-secret provenance only
+(`metadata.instagramScopedUserId`, `metadata.instagramAppScopedId`), never
+the natural key or a publishing target. `account_handle` holds the `/me`
+username. Rows connected before Model B (keyed by a rounded token-scoped
+id) are migrated in place on their next reconnect by a
+compatibility-only legacy reconciliation (same workspace, `instagram`,
+`credentialKind = real`, no provenance yet; exactly one match or the
+connection fails closed; never merges on a professional-id collision) —
+not part of normal identity behavior.
+
+**Provider identifiers are opaque strings:** `external_account_id` (and
+every other provider-native identifier, e.g. `publications.external_publication_id`)
+is `text` and is an opaque provider identifier, never a number. It must be
+preserved losslessly end-to-end — from the provider's raw response through
+parsing, application types and persistence — with no numeric conversion,
+arithmetic, or JavaScript-number round trip (MVP-5.35B.1: Instagram returns
+some ids as JSON numbers above `Number.MAX_SAFE_INTEGER`).
+
 **Credential storage:** raw access tokens, refresh tokens, and API secrets
 are never stored in `social_accounts` or in `metadata` JSONB. They are
 stored exclusively in **Supabase Vault**, referenced by `vault_secret_id`.
@@ -421,6 +479,65 @@ cancellation and failure are represented by `status`, not deletion (§19).
 Transition into `scheduled`, `publishing`, or `published` is gated — see
 §17, Content Approval → Publication Gate.
 
+**Lifecycle transitions** (database triggers, all roles):
+`publishing` only from `scheduled`; `published`/`failed` only from
+`publishing` (MVP-2.3). Re-entering `scheduled` (MVP-5.35B,
+`enforce_publication_scheduling_transitions`, with service-layer parity in
+`schedulePublication`) is allowed only from `draft`, `approved`,
+`scheduled` (reschedule), or `failed` — and never from `failed` when
+`error_code = 'publish_outcome_unknown'`, nor while a
+`publication_attempts` row for the publication is still non-terminal.
+`published`, `publishing` and `cancelled` can never be rescheduled (a
+re-execution could post the same content twice).
+
+`published_at` is the MARQOS time the publication was marked published
+(provider timestamps may later be recorded as provenance, not substituted).
+
+### `publication_attempts`
+- `id`
+- `workspace_id`
+- `publication_id` — composite FK to `publications (id, workspace_id)`
+- `attempt_number` — assigned by trigger: 1, 2, 3… per publication
+- `provider`
+- `stage` — enum `publication_attempt_stage`: `validating`,
+  `container_created`, `container_ready`, `publish_requested` (non-terminal);
+  `published`, `failed`, `outcome_unknown` (terminal)
+- `container_ids` JSONB array — provider container ids only
+- `media_asset_ids` uuid[] — assets actually submitted
+- `external_media_id` — required when `stage = 'published'`
+- `error_code`, `error_message`
+- `started_at`, `updated_at`, `completed_at` (set exactly when terminal)
+
+**Execution semantics (MVP-5.35C-B, Decision #43):** the attempt is the
+source of truth for remote execution progress; `publications.status` is the
+MARQOS lifecycle. `publish_requested` is committed BEFORE the irreversible
+provider publish request is invoked (if that write fails, the request is
+never sent). On success the attempt is written `published` with
+`external_media_id` before the publication moves to `published`. An
+ambiguous publish result sets the attempt to `outcome_unknown` while the
+publication STAYS `publishing` until reconciled; no new attempt may start
+while any earlier attempt is not a known failure. `publish_requested` is only
+written after a deadline check proves the publish request and the final writes
+still fit the execution budget (otherwise the attempt fails with
+`insufficient_publish_time_budget`). An internal dry run ends an attempt as
+`failed` with `error_code = 'dry_run_container_ready'` after `container_ready`
+(MVP-5.35C-D).
+Terminal attempts are immutable (trigger), so an operator-confirmed resolution
+of an `outcome_unknown` attempt marks only the publication `published` (with
+reconciliation provenance in `provider_response`); a `publish_requested`
+attempt whose provider success is known is written `published` first
+(MVP-5.35C-I, Decision #43).
+
+`UNIQUE (publication_id, attempt_number)`; partial unique index: at most one
+non-terminal attempt per publication. An attempt can only be started while
+the publication is `publishing`. Provider checkpoint and audit record
+(MVP-5.35B, Decision #43): provider progress is recorded here because a
+`publications` row cannot be updated while it stays `publishing`; the
+MARQOS lifecycle remains in `publications.status`. Append/audit oriented:
+no DELETE grant for any API role, identity columns immutable, terminal
+attempts immutable. RLS: members read; only the execution path
+(`service_role`) writes.
+
 The calendar is a projection of publications.
 
 ## 9. Analytics Domain
@@ -440,11 +557,49 @@ The calendar is a projection of publications.
 - `clicks`
 - `engagement_rate`
 - `provider_metrics` JSONB
+- `metric_states` JSONB
+- `captured_at_provenance` — enum `metric_timestamp_provenance`: `provider`, `marqos_fallback`
 - `created_at`
 
 `UNIQUE (id, workspace_id)` — supports composite FKs (§16).
 
 Historical snapshots are never overwritten or deleted.
+
+`metric_states`/`captured_at_provenance` are implemented
+(`20260917100000_analytics_metric_state.sql`, MVP-5.10E), additive to the
+original `20260916200000_analytics.sql` schema above them.
+
+Per-metric state (whether each normalized metric above is reported —
+including a legitimate zero — unsupported, or unavailable) is carried in
+`metric_states`, an additive JSONB structure alongside the normalized
+columns, not a relational table (Decision #37). A `CHECK` constraint
+(`validate_publication_metric_states`) enforces, at the database level,
+that a metric is "reported" if and only if its own column is non-null —
+this is not merely an application-layer convention.
+
+`captured_at` represents the best available metric observation time: the
+provider's own reported observation time when available, falling back to
+Marqos's collection/sync time otherwise (Decision #38).
+`captured_at_provenance` records, explicitly and non-inferably, which of
+the two produced a given row's `captured_at`.
+
+`provider_metrics` stores the untouched provider-native payload only
+(Decision #39's raw-response envelope's `payload`). The envelope's other
+two parts are not duplicated into `provider_metrics`: provider identity
+is already recoverable via `publication_id → publications.social_account_id
+→ social_accounts.platform`, and the envelope's observation timestamp is
+represented by the structured `captured_at`/`captured_at_provenance` pair
+above, not stored a second time as raw text. This is a deliberate
+boundary, not an omission — duplicating envelope metadata into the JSONB
+column would not improve raw fidelity, only duplicate data already held
+in typed, queryable form elsewhere on the same row.
+
+`social_accounts.last_synced_at` (§8) is updated, monotonically, inside
+the successful path of the service function that persists a
+`publication_metric_snapshots` row — covering both a direct single-
+publication call and a batch sync — never on a failed collection attempt
+(Decision #40). This requires no schema change; the column already
+exists.
 
 ### `content_performance_scores`
 - `id`
@@ -477,6 +632,15 @@ aggregation formula evolves.
 Raw metric snapshots remain authoritative; scores are always re-derivable
 from them.
 
+The MVP-3 calculation (`score_type = "engagement_rate"`) is a provisional
+passthrough of `publication_metric_snapshots.engagement_rate`, not a
+genuinely derived calculation — no aggregation, weighting, or
+transformation is applied (Decision #31). "Re-derivable from raw
+snapshots" describes this table's traceability guarantee (a score can
+always be recomputed/audited against the snapshot it came from), not a
+claim that the current MVP-3 `score_type` is itself a sophisticated
+derived formula.
+
 ## 10. AI Domain
 
 ### `ai_jobs`
@@ -493,6 +657,7 @@ from them.
 - `output_reference` JSONB
 - `error_code`
 - `error_message`
+- `prompt_version_id` nullable FK → `prompt_versions.id`
 - `started_at`
 - `completed_at`
 - `created_at`
@@ -507,8 +672,20 @@ Every AI execution is attributable: `trigger_type = 'user'` requires
 traceability gap where an AI job's origin (a human action vs. an autonomous
 automation policy) was previously unrecorded.
 
-`content_versions.ai_job_id` and `assets.ai_job_id` are the forward links
-from generated artifacts back to the job that produced them (§5, §6).
+`content_versions.ai_job_id` and `marqos_assets.ai_job_id` are the forward
+links from generated artifacts back to the job that produced them (§5, §6).
+
+`prompt_version_id` records which `prompt_versions` row (if any) produced
+this job's request (DECISIONS #26). It is a **plain** foreign key only —
+unlike the other FKs listed in §16 — because `prompt_versions.workspace_id`
+is nullable (`NULL` denotes a global prompt shared across every workspace),
+so a global prompt has no single workspace to composite-FK-check
+`ai_jobs.workspace_id` against. Tenant safety for prompt resolution is
+guaranteed instead by the resolution precedence itself (a workspace only
+ever resolves its own active prompt or an explicitly global one, never
+another workspace's private prompt — see `prompt_versions` below), not by a
+composite FK. `prompt_versions` is therefore not added to §16's composite-FK
+target list.
 
 ### `ai_usage`
 - `id`
@@ -570,7 +747,7 @@ is set it is composite-FK-checked against `brands (id, workspace_id)`.
 - `workspace_id`
 - `insight_id`
 - `evidence_type` — descriptive label only (e.g. `metric`, `signal_cluster`); no longer a discriminator for an untyped reference
-- `signal_id` nullable FK → `signals.id`
+- `signal_id` nullable FK → `marqos_signals.id`
 - `topic_id` nullable FK → `topics.id`
 - `opportunity_id` nullable FK → `opportunities.id`
 - `content_id` nullable FK → `content.id`
@@ -728,7 +905,7 @@ recommendation
 Intelligence flow:
 
 ```text
-signal_source → signals ↔ topics → opportunities
+marqos_signal_source → marqos_signals ↔ topics → opportunities
 ```
 
 Brand flow:
@@ -780,18 +957,18 @@ composite foreign keys, not application code alone.
 - `brand_identity (brand_id, workspace_id)`, `brand_voice (brand_id, workspace_id)`,
   `audience_profiles (brand_id, workspace_id)`, `content_pillars (brand_id, workspace_id)`
   → `brands (id, workspace_id)`
-- `content_assets (content_id, workspace_id)` → `content (id, workspace_id)`;
-  `content_assets (asset_id, workspace_id)` → `assets (id, workspace_id)`
-- `signal_topics (signal_id, workspace_id)` → `signals (id, workspace_id)`;
+- `marqos_content_assets (content_id, workspace_id)` → `content (id, workspace_id)`;
+  `marqos_content_assets (asset_id, workspace_id)` → `marqos_assets (id, workspace_id)`
+- `signal_topics (signal_id, workspace_id)` → `marqos_signals (id, workspace_id)`;
   `signal_topics (topic_id, workspace_id)` → `topics (id, workspace_id)`
 - `publications (content_variant_id, workspace_id)` → `content_variants (id, workspace_id)`;
   `publications (social_account_id, workspace_id)` → `social_accounts (id, workspace_id)`
 - `content_versions (ai_job_id, workspace_id)` → `ai_jobs (id, workspace_id)` (nullable)
-- `assets (ai_job_id, workspace_id)` → `ai_jobs (id, workspace_id)` (nullable)
+- `marqos_assets (ai_job_id, workspace_id)` → `ai_jobs (id, workspace_id)` (nullable)
 - `ai_jobs (automation_run_id, workspace_id)` → `automation_runs (id, workspace_id)` (nullable)
 - Every optional `brand_id` alongside `workspace_id`
   (`content_briefs`, `content`, `opportunities`, `social_accounts`,
-  `assets`, `insights`) → `brands (id, workspace_id)` (nullable)
+  `marqos_assets`, `insights`) → `brands (id, workspace_id)` (nullable)
 - `insight_evidence`'s six evidence columns, each paired with `workspace_id`,
   against their respective target tables (§11)
 
@@ -853,10 +1030,12 @@ Prioritize:
 - `workspace_id` on every table that carries it (including the
   newly-direct `content_versions`, `content_variants`, `brand_identity`,
   `brand_voice`, `audience_profiles`, `content_pillars`, `signal_topics`,
-  `content_assets`)
+  `marqos_content_assets`)
 - All foreign keys, including the new `ai_job_id`, `automation_run_id`,
   and the six `insight_evidence` evidence columns
 - `(workspace_id, scheduled_at)`, `(workspace_id, status)` on `publications`
+- `publication_attempts (publication_id, attempt_number)` unique and the
+  partial "one non-terminal attempt" unique index
 - `(publication_id, captured_at)` on `publication_metric_snapshots`
 - `(workspace_id, captured_at)`
 - `(content_id, version_number)` unique index on `content_versions`
@@ -872,9 +1051,9 @@ patterns.
 
 ## 19. Delete / Archive Policy
 
-Soft/archive preferred for workspaces, brands, content, assets, social
-accounts, and automations — archival sets a status/`archived_at` value and
-never removes the row.
+Soft/archive preferred for workspaces, brands, content, marqos_assets,
+social accounts, and automations — archival sets a status/`archived_at`
+value and never removes the row.
 
 **Never hard-deleted, under any circumstance:** `content_versions`,
 `content_variants`, `publications`, `publication_metric_snapshots`,
@@ -893,8 +1072,8 @@ historical-record table uses `ON DELETE RESTRICT` (or `NO ACTION`), never
 - `publication_metric_snapshots.publication_id` → `publications.id`: `RESTRICT`
 - `content_performance_scores.publication_id` / `.content_id`: `RESTRICT`
 - Any FK into `content`, `content_versions`, `content_variants`,
-  `assets`, or `publications` from `content_approvals`,
-  `insight_evidence`, or `content_assets`: `RESTRICT`
+  `marqos_assets`, or `publications` from `content_approvals`,
+  `insight_evidence`, or `marqos_content_assets`: `RESTRICT`
 
 In practice this means a `content` row can be archived (`archived_at` set,
 `status = 'archived'`) while its versions, variants, and publications
@@ -988,6 +1167,6 @@ place of an unrestricted polymorphic reference.
 Future paid-media entities should be separate: ad accounts, campaigns, ad
 sets, ads, ad metrics, attribution, conversion events, and experiments.
 
-A vector/embedding column (e.g. `pgvector` on `signals` or `topics`) for
+A vector/embedding column (e.g. `pgvector` on `marqos_signals` or `topics`) for
 semantic similarity search is a documented future extension point for the
 Intelligence domain (§4) and is explicitly not required for MVP.

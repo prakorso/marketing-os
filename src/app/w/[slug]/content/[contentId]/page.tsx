@@ -17,6 +17,7 @@ import {
   listContentVersions,
   listLinkedAssets,
 } from "@/server/services/content";
+import { listOpportunities } from "@/server/services/intelligence";
 import type { ContentApprovalStatus, ContentStatus, ContentVariantStatus } from "@/types/database";
 
 import {
@@ -26,6 +27,8 @@ import {
   createContentVariantAction,
   createContentVersionAction,
   detachAssetAction,
+  generateContentVersionWithAiAction,
+  generateImageAssetWithAiAction,
   updateContentBriefAction,
   updateContentStatusAction,
   updateContentVariantAction,
@@ -42,10 +45,13 @@ const sectionEyebrowClass = "font-label text-label-sm uppercase tracking-wider t
 
 export default async function ContentDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string; contentId: string }>;
+  searchParams: Promise<{ ai_error?: string; ai_image_error?: string }>;
 }) {
   const { slug, contentId } = await params;
+  const { ai_error: aiError, ai_image_error: aiImageError } = await searchParams;
 
   const workspace = await getWorkspaceBySlug(slug);
   if (!workspace) {
@@ -67,6 +73,7 @@ export default async function ContentDetailPage({
     availableAssets,
     workspaceBriefs,
     brandDetail,
+    opportunities,
   ] = await Promise.all([
     getCurrentUserRole(workspace.id),
     listBrandsForWorkspace(workspace.id),
@@ -77,7 +84,13 @@ export default async function ContentDetailPage({
     listAssetsForWorkspace(workspace.id),
     listContentBriefsForWorkspace(workspace.id),
     getBrandDetail(workspace.id, content.brand_id),
+    listOpportunities(workspace.id),
   ]);
+
+  // MVP-4.2: a manually-selected Opportunity link only — no AI detection,
+  // scoring, or ranking is implied anywhere in this section. Title is the
+  // only field surfaced, per the approved minimal-context contract.
+  const linkedOpportunity = brief?.opportunity_id ? opportunities.find((o) => o.id === brief.opportunity_id) : null;
 
   const canEdit = role === "owner" || role === "admin" || role === "marketer";
   const canApprove = role === "owner" || role === "admin";
@@ -169,6 +182,36 @@ export default async function ContentDetailPage({
                     Format
                   </label>
                   <input id="brief-format" name="format" defaultValue={brief.format ?? ""} className={inputClass} />
+                  <label className={labelClass} htmlFor="brief-creative-direction">
+                    Creative direction (optional)
+                  </label>
+                  <input
+                    id="brief-creative-direction"
+                    name="creative_direction"
+                    defaultValue={
+                      brief.creative_direction && typeof brief.creative_direction === "object" && "text" in brief.creative_direction
+                        ? String((brief.creative_direction as { text?: unknown }).text ?? "")
+                        : ""
+                    }
+                    placeholder="Visual direction for AI image generation, e.g. 'minimalist product shot on white background'"
+                    className={inputClass}
+                  />
+                  <label className={labelClass} htmlFor="brief-opportunity">
+                    Opportunity (optional)
+                  </label>
+                  <select
+                    id="brief-opportunity"
+                    name="opportunity_id"
+                    defaultValue={brief.opportunity_id ?? ""}
+                    className={inputClass}
+                  >
+                    <option value="">None</option>
+                    {opportunities.map((opportunity) => (
+                      <option key={opportunity.id} value={opportunity.id}>
+                        {opportunity.title}
+                      </option>
+                    ))}
+                  </select>
                   <Button type="submit" variant="secondary" className="mt-space-xs self-start">
                     Save brief
                   </Button>
@@ -190,6 +233,18 @@ export default async function ContentDetailPage({
                   <div>
                     <dt className="font-label text-label-sm text-on-surface-variant">CTA</dt>
                     <dd className="font-body text-body-sm text-on-surface">{brief.cta ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-label text-label-sm text-on-surface-variant">Creative direction</dt>
+                    <dd className="font-body text-body-sm text-on-surface">
+                      {brief.creative_direction && typeof brief.creative_direction === "object" && "text" in brief.creative_direction
+                        ? String((brief.creative_direction as { text?: unknown }).text ?? "") || "—"
+                        : "—"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="font-label text-label-sm text-on-surface-variant">Opportunity</dt>
+                    <dd className="font-body text-body-sm text-on-surface">{linkedOpportunity?.title ?? "—"}</dd>
                   </div>
                 </dl>
               )
@@ -221,6 +276,26 @@ export default async function ContentDetailPage({
                       CTA
                     </label>
                     <input id="new-brief-cta" name="cta" className={inputClass} />
+                    <label className={labelClass} htmlFor="new-brief-creative-direction">
+                      Creative direction (optional)
+                    </label>
+                    <input
+                      id="new-brief-creative-direction"
+                      name="creative_direction"
+                      placeholder="Visual direction for AI image generation, e.g. 'minimalist product shot on white background'"
+                      className={inputClass}
+                    />
+                    <label className={labelClass} htmlFor="new-brief-opportunity">
+                      Opportunity (optional)
+                    </label>
+                    <select id="new-brief-opportunity" name="opportunity_id" defaultValue="" className={inputClass}>
+                      <option value="">None</option>
+                      {opportunities.map((opportunity) => (
+                        <option key={opportunity.id} value={opportunity.id}>
+                          {opportunity.title}
+                        </option>
+                      ))}
+                    </select>
                     <Button type="submit" variant="secondary" className="mt-space-xs self-start">
                       Create brief
                     </Button>
@@ -256,6 +331,15 @@ export default async function ContentDetailPage({
               creates a new one.
             </p>
 
+            {aiError ? (
+              <div className="rounded-control border border-error-container bg-error-container px-space-md py-space-sm">
+                <span className="font-label text-label-sm font-semibold uppercase tracking-wide text-on-error-container">
+                  AI generation failed
+                </span>
+                <p className="mt-space-xs font-body text-body-sm text-on-error-container">{aiError}</p>
+              </div>
+            ) : null}
+
             {versionsWithVariants.length === 0 ? (
               <EmptyState title="No versions yet" description="Create the first version to start this content." />
             ) : (
@@ -263,9 +347,15 @@ export default async function ContentDetailPage({
                 {versionsWithVariants.map(({ version, variants }) => (
                   <div key={version.id} className="rounded-control border border-outline-variant p-space-md">
                     <div className="flex items-center justify-between">
-                      <span className="font-label text-label-md font-bold text-primary">
-                        v{version.version_number}
-                      </span>
+                      <div className="flex items-center gap-space-xs">
+                        <span className="font-label text-label-md font-bold text-primary">
+                          v{version.version_number}
+                        </span>
+                        {/* ai_job_id (not the free-text generation_method) is the actual traceability guarantee — DECISIONS #28 */}
+                        <Badge variant={version.ai_job_id ? "active" : "neutral"}>
+                          {version.ai_job_id ? "AI Generated" : "Human"}
+                        </Badge>
+                      </div>
                       <span className="font-label text-label-sm text-on-surface-variant">
                         {version.generation_method} · {new Date(version.created_at).toLocaleString()}
                       </span>
@@ -349,6 +439,31 @@ export default async function ContentDetailPage({
             )}
 
             {canEdit ? (
+              <div className="flex flex-col gap-space-sm border-t border-outline-variant pt-space-md">
+                <span className={sectionEyebrowClass}>Generate with AI</span>
+                {brief ? (
+                  <>
+                    <p className="font-body text-body-sm text-on-surface-variant">
+                      Generates a new version from the attached Content Brief via the AI Service. Fails explicitly
+                      (no fallback text) if no active prompt is configured for this workspace.
+                    </p>
+                    <form action={generateContentVersionWithAiAction} className="self-start">
+                      <input type="hidden" name="slug" value={slug} />
+                      <input type="hidden" name="content_id" value={content.id} />
+                      <Button type="submit" variant="secondary">
+                        Generate with AI
+                      </Button>
+                    </form>
+                  </>
+                ) : (
+                  <p className="font-body text-body-sm text-on-surface-variant">
+                    Attach a Content Brief above to enable AI text generation.
+                  </p>
+                )}
+              </div>
+            ) : null}
+
+            {canEdit ? (
               <form action={createContentVersionAction} className="flex flex-col gap-space-sm border-t border-outline-variant pt-space-md">
                 <input type="hidden" name="slug" value={slug} />
                 <input type="hidden" name="content_id" value={content.id} />
@@ -374,6 +489,16 @@ export default async function ContentDetailPage({
 
           <Card className="flex flex-col gap-space-md">
             <span className={sectionEyebrowClass}>Linked Assets</span>
+
+            {aiImageError ? (
+              <div className="rounded-control border border-error-container bg-error-container px-space-md py-space-sm">
+                <span className="font-label text-label-sm font-semibold uppercase tracking-wide text-on-error-container">
+                  AI image generation failed
+                </span>
+                <p className="mt-space-xs font-body text-body-sm text-on-error-container">{aiImageError}</p>
+              </div>
+            ) : null}
+
             {linkedAssets.length === 0 ? (
               <EmptyState title="No assets linked yet" />
             ) : (
@@ -382,7 +507,7 @@ export default async function ContentDetailPage({
                   const thumbnailUrl = thumbnailByAssetId.get(la.asset_id);
                   return (
                     <div key={la.asset_id} className="flex flex-col gap-space-xs">
-                      <div className="flex aspect-square items-center justify-center overflow-hidden rounded-control bg-surface-container-low">
+                      <div className="relative flex aspect-square items-center justify-center overflow-hidden rounded-control bg-surface-container-low">
                         {thumbnailUrl ? (
                           // eslint-disable-next-line @next/next/no-img-element -- signed, expiring private URL
                           <img src={thumbnailUrl} alt={la.asset.file_name} className="h-full w-full object-cover" />
@@ -391,6 +516,12 @@ export default async function ContentDetailPage({
                             {la.asset.asset_type}
                           </span>
                         )}
+                        <div className="absolute left-1 top-1">
+                          {/* ai_job_id (not a naming convention) is the actual traceability guarantee — DECISIONS #28 */}
+                          <Badge variant={la.asset.ai_job_id ? "active" : "neutral"}>
+                            {la.asset.ai_job_id ? "AI Generated" : "Human"}
+                          </Badge>
+                        </div>
                       </div>
                       <span className="truncate font-body text-body-sm text-on-surface">{la.asset.file_name}</span>
                       {canEdit ? (
@@ -430,6 +561,32 @@ export default async function ContentDetailPage({
                   Attach
                 </Button>
               </form>
+            ) : null}
+
+            {canEdit ? (
+              <div className="flex flex-col gap-space-sm border-t border-outline-variant pt-space-md">
+                <span className={sectionEyebrowClass}>Generate Image with AI</span>
+                {brief ? (
+                  <>
+                    <p className="font-body text-body-sm text-on-surface-variant">
+                      Generates an image from the attached Content Brief (including Creative Direction, if set) via
+                      the AI Service, and links it here automatically. Fails explicitly (no fallback image) if no
+                      active prompt is configured for this workspace.
+                    </p>
+                    <form action={generateImageAssetWithAiAction} className="self-start">
+                      <input type="hidden" name="slug" value={slug} />
+                      <input type="hidden" name="content_id" value={content.id} />
+                      <Button type="submit" variant="secondary">
+                        Generate Image with AI
+                      </Button>
+                    </form>
+                  </>
+                ) : (
+                  <p className="font-body text-body-sm text-on-surface-variant">
+                    Attach a Content Brief above to enable AI image generation.
+                  </p>
+                )}
+              </div>
             ) : null}
           </Card>
 
