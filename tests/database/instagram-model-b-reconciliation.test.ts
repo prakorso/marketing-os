@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { connectRealInstagramAccount } from "@/server/services/social-accounts";
 
@@ -103,8 +103,16 @@ describe.skipIf(!hasLocalSupabase)("connectRealInstagramAccount — Model B lega
     editor = await createSignedInTestUser(admin);
   });
 
+  // Hermetic: connectRealInstagramAccount reads the OAuth client config from
+  // the environment; never depend on a developer's .env.local (CI has none).
+  beforeEach(() => {
+    vi.stubEnv("INSTAGRAM_CLIENT_ID", "9990000000000001");
+    vi.stubEnv("INSTAGRAM_CLIENT_SECRET", "test-instagram-client-secret");
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     setTestAccessToken(null);
   });
 
