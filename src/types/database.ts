@@ -355,6 +355,40 @@ export type PublishingRuntimeAllowlistEntry = {
   created_at: string;
 };
 
+/** MVP-5.36H1: one row per DB-clock 5-minute scheduler slot; only the holder may work in it. */
+export type PublishingRuntimeSlotLease = {
+  runtime_key: "instagram_scheduled_publishing";
+  slot_start: string;
+  run_id: string;
+  acquired_at: string;
+  completed_at: string | null;
+  outcome: string | null;
+  duplicate_count: number;
+};
+
+/** MVP-5.36H1: acquire_runtime_slot_lease result. */
+export type RuntimeSlotLeaseAcquireResult = {
+  acquired: boolean;
+  slot_start: string;
+  holder_run_id: string | null;
+  reason: "acquired" | "already_held" | "duplicate_slot" | "overlap_active" | "control_off";
+  mode: PublishingRuntimeMode | null;
+};
+
+/** MVP-5.36H1: complete_runtime_slot_lease result. */
+export type RuntimeSlotLeaseCompleteResult = {
+  completed: boolean;
+  reason: "completed" | "already_completed" | "not_holder";
+};
+
+/** MVP-5.36H1: select_runtime_resume result (at most one row). */
+export type RuntimeResumeSelection = {
+  publication_id: string;
+  workspace_id: string;
+  attempt_id: string;
+  stage: Extract<PublicationAttemptStage, "container_created" | "container_ready">;
+};
+
 /** MVP-5.36: one row per publication inspected by reconcile_stale_runtime_publications. */
 export type RuntimeReconciliationRow = {
   publication_id: string;
@@ -378,6 +412,13 @@ export type PublicationAttempt = {
   started_at: string;
   updated_at: string;
   completed_at: string | null;
+  /** MVP-5.36H1: committed before G1 dispatch; set + no container = G1 outcome unknown. */
+  container_create_requested_at: string | null;
+  /** MVP-5.36H1: when the container id was recorded (READINESS_MAX is measured from here). */
+  container_created_at: string | null;
+  status_poll_count: number;
+  /** MVP-5.36H1: runId of the lease holder that last selected/worked this attempt. */
+  last_run_id: string | null;
 };
 
 /**
@@ -852,7 +893,16 @@ export type Database = {
         Update: Partial<
           Pick<
             PublicationAttempt,
-            "stage" | "container_ids" | "media_asset_ids" | "external_media_id" | "error_code" | "error_message"
+            | "stage"
+            | "container_ids"
+            | "media_asset_ids"
+            | "external_media_id"
+            | "error_code"
+            | "error_message"
+            | "container_create_requested_at"
+            | "container_created_at"
+            | "status_poll_count"
+            | "last_run_id"
           >
         >;
         // No DELETE grant for any API role (append/audit record).
@@ -863,6 +913,13 @@ export type Database = {
         Row: PublishingRuntimeControl;
         Insert: Partial<PublishingRuntimeControl> & Pick<PublishingRuntimeControl, "key">;
         Update: Partial<Pick<PublishingRuntimeControl, "enabled" | "mode" | "note">>;
+        Relationships: [];
+      };
+      // MVP-5.36H1: written only through the lease RPCs (service-role only).
+      publishing_runtime_slot_lease: {
+        Row: PublishingRuntimeSlotLease;
+        Insert: Partial<PublishingRuntimeSlotLease> & Pick<PublishingRuntimeSlotLease, "runtime_key" | "slot_start" | "run_id">;
+        Update: Partial<Pick<PublishingRuntimeSlotLease, "completed_at" | "outcome" | "duplicate_count" | "acquired_at">>;
         Relationships: [];
       };
       publishing_runtime_allowlist: {
@@ -1018,13 +1075,25 @@ export type Database = {
         Returns: boolean;
       };
       // MVP-5.36 (Decision #44): service_role only.
-      claim_runtime_publications: {
-        Args: { p_cap: number };
-        Returns: Publication[];
+      // v1 (p_cap) is used by the deployed runtime; v3 (p_cap, p_run_id) is lease-aware + single-flight (MVP-5.36H1).
+      claim_runtime_publications:
+        | { Args: { p_cap: number }; Returns: Publication[] }
+        | { Args: { p_cap: number; p_run_id: string }; Returns: Publication[] };
+      // v1 (p_stale_seconds) is used by the deployed runtime; v2 adds the lease holder + resumability (MVP-5.36H1).
+      reconcile_stale_runtime_publications:
+        | { Args: { p_stale_seconds: number }; Returns: RuntimeReconciliationRow[] }
+        | { Args: { p_stale_seconds: number; p_run_id: string }; Returns: RuntimeReconciliationRow[] };
+      acquire_runtime_slot_lease: {
+        Args: { p_run_id: string };
+        Returns: RuntimeSlotLeaseAcquireResult[];
       };
-      reconcile_stale_runtime_publications: {
-        Args: { p_stale_seconds: number };
-        Returns: RuntimeReconciliationRow[];
+      complete_runtime_slot_lease: {
+        Args: { p_run_id: string; p_outcome: string };
+        Returns: RuntimeSlotLeaseCompleteResult[];
+      };
+      select_runtime_resume: {
+        Args: { p_run_id: string };
+        Returns: RuntimeResumeSelection[];
       };
     };
   };
