@@ -338,6 +338,31 @@ export const TERMINAL_PUBLICATION_ATTEMPT_STAGES: readonly PublicationAttemptSta
  * are written only by the execution path (service_role) and read by members.
  * container_ids holds provider container ids only — never tokens or URLs.
  */
+/** MVP-5.36 (Decision #44): Level-6 runtime control. A missing row means OFF. */
+export type PublishingRuntimeMode = "dry_run" | "publish";
+export type PublishingRuntimeControl = {
+  key: "instagram_scheduled_publishing";
+  enabled: boolean;
+  mode: PublishingRuntimeMode;
+  note: string | null;
+  updated_at: string;
+};
+
+/** MVP-5.36: social accounts the Level-6 runtime may act on. */
+export type PublishingRuntimeAllowlistEntry = {
+  social_account_id: string;
+  workspace_id: string;
+  created_at: string;
+};
+
+/** MVP-5.36: one row per publication inspected by reconcile_stale_runtime_publications. */
+export type RuntimeReconciliationRow = {
+  publication_id: string;
+  workspace_id: string;
+  attempt_id: string | null;
+  action: string;
+};
+
 export type PublicationAttempt = {
   id: string;
   workspace_id: string;
@@ -833,6 +858,19 @@ export type Database = {
         // No DELETE grant for any API role (append/audit record).
         Relationships: [];
       };
+      // MVP-5.36: service-role only (no anon/authenticated grants, no RLS policies).
+      publishing_runtime_control: {
+        Row: PublishingRuntimeControl;
+        Insert: Partial<PublishingRuntimeControl> & Pick<PublishingRuntimeControl, "key">;
+        Update: Partial<Pick<PublishingRuntimeControl, "enabled" | "mode" | "note">>;
+        Relationships: [];
+      };
+      publishing_runtime_allowlist: {
+        Row: PublishingRuntimeAllowlistEntry;
+        Insert: Pick<PublishingRuntimeAllowlistEntry, "social_account_id" | "workspace_id">;
+        Update: Record<string, never>;
+        Relationships: [];
+      };
       notifications: {
         Row: Notification;
         Insert: Partial<Notification> & Pick<Notification, "workspace_id" | "user_id" | "type" | "title" | "message">;
@@ -978,6 +1016,15 @@ export type Database = {
       is_workspace_editor: {
         Args: { p_workspace_id: string };
         Returns: boolean;
+      };
+      // MVP-5.36 (Decision #44): service_role only.
+      claim_runtime_publications: {
+        Args: { p_cap: number };
+        Returns: Publication[];
+      };
+      reconcile_stale_runtime_publications: {
+        Args: { p_stale_seconds: number };
+        Returns: RuntimeReconciliationRow[];
       };
     };
   };

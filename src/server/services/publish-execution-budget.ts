@@ -1,5 +1,3 @@
-import "server-only";
-
 /**
  * MVP-5.35C-D — execution budget for staged publishing inside the PROVEN
  * 60 s Netlify synchronous/streaming limit (MVP-5.35C-C §13). The
@@ -48,9 +46,38 @@ export const DEFAULT_EXECUTION_BUDGET: Readonly<ExecutionBudgetConfig> = Object.
 
 export const PLATFORM_SYNC_LIMIT_MS = 60_000;
 
-export function assertBudgetFitsPlatform(config: ExecutionBudgetConfig): void {
-  if (config.totalMs > PLATFORM_SYNC_LIMIT_MS - 15_000) {
-    throw new Error("Execution budget must leave at least 15 s of platform headroom");
+/** A platform execution ceiling plus the headroom the application must never plan to use. */
+export type PlatformLimit = { limitMs: number; minHeadroomMs: number };
+
+/** Netlify synchronous/streaming functions (MVP-5.35C-C): 60 s, 15 s headroom. */
+export const SYNC_FUNCTION_PLATFORM: Readonly<PlatformLimit> = Object.freeze({ limitMs: PLATFORM_SYNC_LIMIT_MS, minHeadroomMs: 15_000 });
+
+/**
+ * MVP-5.36 (Decision #44): Netlify Scheduled Functions have a documented
+ * 30 s execution limit; the Level-6 runtime plans at most 25 s.
+ */
+export const SCHEDULED_FUNCTION_LIMIT_MS = 30_000;
+export const SCHEDULED_FUNCTION_PLATFORM: Readonly<PlatformLimit> = Object.freeze({ limitMs: SCHEDULED_FUNCTION_LIMIT_MS, minHeadroomMs: 5_000 });
+
+/**
+ * Level-6 scheduler budget (≤ 25 s, whole invocation). Worst case of the
+ * provider ceilings before publish (create 5 s + polling 6 s = 11 s) plus
+ * both reserves (5 s publish + 3 s persistence) = 19 s, leaving ≥ 6 s for
+ * the control read, reconciliation, claim, loads and the Vault read.
+ */
+export const SCHEDULER_EXECUTION_BUDGET: Readonly<ExecutionBudgetConfig> = Object.freeze({
+  totalMs: 25_000,
+  providerRequestTimeoutMs: 5_000,
+  pollBudgetMs: 6_000,
+  pollIntervalMs: 1_500,
+  publishReserveMs: 5_000,
+  finalPersistenceReserveMs: 3_000,
+  minimumProviderCallMs: 1_000,
+});
+
+export function assertBudgetFitsPlatform(config: ExecutionBudgetConfig, platform: PlatformLimit = SYNC_FUNCTION_PLATFORM): void {
+  if (config.totalMs > platform.limitMs - platform.minHeadroomMs) {
+    throw new Error(`Execution budget must leave at least ${platform.minHeadroomMs / 1000} s of platform headroom`);
   }
   if (config.publishReserveMs < config.providerRequestTimeoutMs) {
     throw new Error("The publish reserve must cover a full provider request timeout");
@@ -64,9 +91,9 @@ export class ExecutionDeadline {
   private readonly now: () => number;
   private readonly startedAt: number;
 
-  constructor(options: { now?: () => number; config?: Partial<ExecutionBudgetConfig> } = {}) {
+  constructor(options: { now?: () => number; config?: Partial<ExecutionBudgetConfig>; platform?: PlatformLimit } = {}) {
     this.config = { ...DEFAULT_EXECUTION_BUDGET, ...(options.config ?? {}) };
-    assertBudgetFitsPlatform(this.config);
+    assertBudgetFitsPlatform(this.config, options.platform);
     this.now = options.now ?? monotonicNow;
     this.startedAt = this.now();
   }

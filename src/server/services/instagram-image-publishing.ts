@@ -1,15 +1,14 @@
-import "server-only";
-
 import type { StagedMediaPublisher } from "@/lib/social/provider";
 import {
   prepareReadyContainer,
+  providerMutationAllowed,
   providerSummary,
   withLocalRetries,
   type PrepareDeps,
   type StagedPublishContext,
   type StagedPublishOutcome,
 } from "@/server/services/instagram-publish-prepare";
-import type { MarkPublishedInput } from "@/server/services/publications";
+import type { MarkPublishedInput } from "@/server/services/publication-transitions";
 import type { Publication } from "@/types/database";
 
 export {
@@ -74,6 +73,14 @@ export async function runStagedImagePublish(ctx: StagedPublishContext, deps: Sta
     return failKnown("checkpoint_failed", "Could not record the publish request checkpoint; publish was not attempted", { containerId });
   }
   emit("publish_requested", { attemptId: attempt.id, containerId });
+
+  // Decision #44 (C): runtime control re-check immediately before G3. The
+  // publish request has provably not been sent, so OFF is known-not-published.
+  if (!(await providerMutationAllowed(deps, "media_publish"))) {
+    return failKnown("runtime_disabled_before_publish", "Runtime publishing was switched off before the publish request; no publish request was made", {
+      containerId,
+    });
+  }
 
   // --- T6c: the irreversible request ------------------------------------------
   const published = await deps.provider.publishMediaContainer({

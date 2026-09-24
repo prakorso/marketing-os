@@ -5,6 +5,9 @@ import {
   DEFAULT_EXECUTION_BUDGET,
   ExecutionDeadline,
   PLATFORM_SYNC_LIMIT_MS,
+  SCHEDULED_FUNCTION_LIMIT_MS,
+  SCHEDULED_FUNCTION_PLATFORM,
+  SCHEDULER_EXECUTION_BUDGET,
 } from "@/server/services/publish-execution-budget";
 
 /** MVP-5.35C-D — execution budget inside the PROVEN 60 s Netlify limit. */
@@ -64,5 +67,37 @@ describe("ExecutionDeadline", () => {
     expect(d.publishCallTimeoutMs()).toBe(2_000);
     clock.advance(10_000);
     expect(d.publishCallTimeoutMs()).toBe(0);
+  });
+});
+
+/** MVP-5.36 (Decision #44) — the Level-6 scheduled-function budget (30 s platform limit). */
+describe("SCHEDULER_EXECUTION_BUDGET (W/X)", () => {
+  it("X: plans ≤ 25 s inside the 30 s scheduled limit; worst-case pre-publish ceilings + both reserves fit", () => {
+    expect(SCHEDULED_FUNCTION_LIMIT_MS).toBe(30_000);
+    expect(SCHEDULER_EXECUTION_BUDGET.totalMs).toBeLessThanOrEqual(25_000);
+    expect(() => assertBudgetFitsPlatform(SCHEDULER_EXECUTION_BUDGET, SCHEDULED_FUNCTION_PLATFORM)).not.toThrow();
+    const worstPrePublish = SCHEDULER_EXECUTION_BUDGET.providerRequestTimeoutMs + SCHEDULER_EXECUTION_BUDGET.pollBudgetMs;
+    expect(
+      worstPrePublish + SCHEDULER_EXECUTION_BUDGET.publishReserveMs + SCHEDULER_EXECUTION_BUDGET.finalPersistenceReserveMs,
+    ).toBeLessThanOrEqual(SCHEDULER_EXECUTION_BUDGET.totalMs);
+    // Anything eating the 5 s scheduled headroom is refused.
+    expect(() => new ExecutionDeadline({ config: { ...SCHEDULER_EXECUTION_BUDGET, totalMs: 25_001 }, platform: SCHEDULED_FUNCTION_PLATFORM })).toThrow(/headroom/);
+  });
+
+  it("W: the deadline expires before platform termination and G3 never starts without both reserves", () => {
+    const clock = clockAt();
+    const deadline = new ExecutionDeadline({ now: clock.now, config: SCHEDULER_EXECUTION_BUDGET, platform: SCHEDULED_FUNCTION_PLATFORM });
+    const reserves = SCHEDULER_EXECUTION_BUDGET.publishReserveMs + SCHEDULER_EXECUTION_BUDGET.finalPersistenceReserveMs;
+    clock.advance(SCHEDULER_EXECUTION_BUDGET.totalMs - reserves);
+    expect(deadline.canStartPublish()).toBe(true);
+    expect(deadline.publishCallTimeoutMs()).toBe(SCHEDULER_EXECUTION_BUDGET.providerRequestTimeoutMs);
+    clock.advance(1);
+    expect(deadline.canStartPublish()).toBe(false);
+    expect(deadline.prePublishCallTimeoutMs()).toBeNull();
+    // The G3 timeout always leaves the persistence reserve, so the run ends ≤ 25 s < 30 s.
+    expect(deadline.elapsedMs() + deadline.publishCallTimeoutMs() + SCHEDULER_EXECUTION_BUDGET.finalPersistenceReserveMs).toBeLessThanOrEqual(
+      SCHEDULER_EXECUTION_BUDGET.totalMs,
+    );
+    expect(SCHEDULER_EXECUTION_BUDGET.totalMs).toBeLessThan(SCHEDULED_FUNCTION_LIMIT_MS);
   });
 });

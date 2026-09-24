@@ -711,3 +711,127 @@ MVP-5.35B schema foundation:
   the `publish_requested` checkpoint resolved. Evidence is append-only,
   fsync'd JSONL with safe fields only.
 
+
+## 44. Unattended Runtime Publishing Safety Contract (Level 6, MVP-5.36)
+
+Owner-approved (Panji, MVP-5.36A.1). Locks the safety contract for
+UNATTENDED runtime (scheduled) Instagram publishing before any
+implementation. Decision #43 remains the historical record for the
+owner-operated path (Level 4/5) and still governs the engine's
+idempotency, checkpoint and unknown-outcome semantics; this decision
+supersedes it ONLY where it concerns unattended runtime publishing.
+
+- **Runtime owner.** A Netlify Scheduled Function is the only unattended
+  publishing runtime. It is not URL-invocable, runs only on the published
+  deploy, and has a documented 30-second execution limit. At most ONE
+  publication is executed per invocation in the initial Level 6.
+- **Dual gate, fail-closed.** Runtime publishing requires BOTH the
+  deploy-time env gate (`MARQOS_INSTAGRAM_STAGED_PUBLISHING === "enabled"`)
+  AND a database runtime control with `enabled === true`. A missing row, a
+  read failure, `enabled = false`, or an env value other than exactly
+  `enabled` is OFF; there is no fallback to enabled.
+- **OFF means no mutation.** While either control is OFF the scheduler
+  performs no publication claim, no publication or attempt status change,
+  no reconciliation, no Vault read, no signed asset URL, and no provider
+  read or mutation. It may only read the control, read the env value, write
+  a safe structured log, and return.
+- **Locked runtime order.** (1) create a run id; (2) read the DB runtime
+  control; (3) missing, unreadable or OFF → safe log and return; (4)
+  evaluate the env gate; (5) not exactly `enabled` → safe log and return;
+  (6) provider-free stale reconciliation; (7) allowlisted, capped claim; (8)
+  load and eligibility; (9) re-check the DB control; (10) resolve the Vault
+  credential; (11) engine execution; (12) re-check the DB control
+  immediately before the irreversible publish request; (13) persist; (14)
+  audit.
+- **Pre-claim invariant and claim contract.** No publication may move
+  `scheduled → publishing` for runtime execution unless both controls are
+  ON and the publication matches the database allowlist. The allowlist
+  (social account and/or workspace boundary), the Instagram platform
+  restriction, the runtime-enabled boundary and the cap (initially 1) are
+  enforced atomically INSIDE the claim RPC; filtering after a claim is not
+  acceptable, because a claimed row cannot return to `scheduled`. The claim
+  keeps `FOR UPDATE SKIP LOCKED`, the atomic transition, the approval
+  trigger, the row's own workspace identity and the `scheduled_at <= now()`
+  eligibility. The global, unrestricted claim (`claim_due_publications`) is
+  not used for Level 6 runtime execution.
+- **Kill switch.** The DB runtime control is the fast operational kill
+  switch (effective without a deploy). It is checked before any claim,
+  before the container creation request (G1), and immediately before the
+  publish request (G3). The env gate remains an independent deploy-level
+  interlock.
+- **Reconciliation.** Runtime reconciliation is provider-free (never G1,
+  G2, G3, Vault or signed URLs), may mutate local state, and runs ONLY
+  while both controls are ON. Rules: no attempt → known pre-provider
+  failure only where code evidence proves no provider mutation could have
+  occurred; `validating`/`container_created`/`container_ready` → no publish
+  request occurred, classified by the existing safe reconciliation
+  semantics; `publish_requested` → `outcome_unknown`, never a provider
+  retry; attempt `published` with the publication still `publishing` →
+  local finalization from the durable media id. No second attempt is ever
+  created automatically, and no automatic retry may create a second public
+  post.
+- **Time budget.** The application budget stays below the 30-second
+  platform ceiling; the design target is at most 25 seconds. Exact
+  request, poll and reserve allocations are set by the implementing
+  milestone, which must prove by tests that the deadline expires before
+  platform termination, that the publish request never starts without the
+  persistence reserve, and that a timeout never causes a blind provider
+  retry.
+- **Release atomicity.** The scheduler module-load fix, the dual gate, the
+  allowlisted capped claim, the cap, the runtime budget and the
+  reconciliation safety form ONE release boundary. No deployable build may
+  contain a loadable scheduler without all of them.
+- **Schema.** One future migration is approved in design (runtime
+  publishing controls plus the allowlisted, capped claim RPC). It is
+  created and applied only in a separately authorized implementation
+  milestone.
+- **Phases.** Phase 0: scheduler not loadable, controls absent, provider
+  mutation impossible. Phase 1: the safety release deployed with the DB
+  control OFF and the env gate absent — the scheduler loads, reads the
+  control and no-ops. Phase 2 (explicit owner authorization): an
+  allowlisted fixture only, a controlled dry run (container creation and
+  status reads bounded; the publish request structurally impossible).
+  Phase 3 (separate explicit owner authorization): one allowlisted real
+  scheduled publication, at most one container creation and one publish
+  request. Phase 4 (separate production authorization): bounded rollout,
+  requiring OAuth state signing first.
+- **Security prerequisites.** Before Phase 2, the scheduler load failure,
+  the runtime budget, the pre-claim gate, the allowlisted capped claim with
+  the kill switch, and the stale-claim reconciliation must be complete.
+  Before Phase 4, OAuth state signing must be complete. The hosted
+  `publication_attempts` ACL residual is an accepted v1 residual for later
+  hardening.
+- **Implementation record (MVP-5.36BCD).** The locked text above is
+  unchanged; this bullet records what the safety release implements.
+  - Migration `20260925120000_runtime_publishing_controls.sql`:
+    `publishing_runtime_control` (single row
+    `instagram_scheduled_publishing`, `enabled` default false, `mode`
+    `dry_run` | `publish`, default `dry_run`; no row = OFF) and
+    `publishing_runtime_allowlist` (social account + workspace, composite
+    FK). Both service-role only (RLS on, no policies, browser roles
+    revoked). `claim_runtime_publications(p_cap)` accepts only `p_cap = 1`.
+    `reconcile_stale_runtime_publications(p_stale_seconds)` requires at
+    least 60 s. Both RPCs return nothing while the control is OFF.
+  - Runtime: `src/server/runtime/scheduled-publishing.ts`, invoked only by
+    `netlify/functions/execute-due-publications.ts`. It is not reachable
+    from `src/app` or `src/components`, and a test enforces this. The
+    stale threshold is 600 s (database clock).
+  - Mode: `dry_run` runs the container-only engine and can never reach the
+    publish request. Only an explicit `publish` enables it.
+  - Budget: total 25 s under the 30 s limit (5 s headroom). Allocations:
+    provider request ≤ 5 s, polling ≤ 6 s, publish reserve 5 s, persistence
+    reserve 3 s.
+  - Provider-call ceiling per invocation: container creation ≤ 1, publish
+    request ≤ 1. A further call is refused without a request.
+  - Vault is read at most once, after the claim, the eligibility check and
+    the control re-check.
+  - A control switched OFF after the claim (step 9) leaves the claimed row
+    `publishing` without further mutation; the reconciler closes it once
+    the runtime is ON again. After an attempt exists, an OFF re-check
+    closes that attempt as known-not-published.
+  - Module load: the scheduler's module graph is free of `server-only`
+    because the Netlify function bundler resolves default conditions.
+    Modules holding secrets or request context keep the guard.
+  - Unknown outcomes: `outcome_unknown` is closed only by the explicit
+    operator path `closeUnknownAsNotPublished` (confirmed not published,
+    with an evidence reference). The runtime never closes one.

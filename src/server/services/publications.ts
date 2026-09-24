@@ -5,6 +5,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { CALENDAR_PUBLICATION_STATUSES, type CalendarPublicationStatus } from "@/components/calendar/types";
 import { createClient } from "@/lib/supabase/server";
 import { notifyPublicationFailed } from "@/server/services/notifications";
+import {
+  failedFields,
+  publishedFields,
+  updatePublicationRow,
+  type MarkFailedInput,
+  type MarkPublishedInput,
+} from "@/server/services/publication-transitions";
 import { getCurrentUserRole } from "@/server/services/workspaces";
 import type { ContentApprovalStatus, Database, Publication } from "@/types/database";
 
@@ -67,25 +74,6 @@ async function assertEditor(workspaceId: string) {
   }
 }
 
-async function updatePublicationRow(
-  client: SupabaseClient<Database>,
-  workspaceId: string,
-  publicationId: string,
-  fields: Database["public"]["Tables"]["publications"]["Update"],
-): Promise<Publication> {
-  const { data, error } = await client
-    .from("publications")
-    .update(fields)
-    .eq("workspace_id", workspaceId)
-    .eq("id", publicationId)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to update publication: ${error.message}`);
-  }
-  return data;
-}
 
 export async function listPublicationsForWorkspace(workspaceId: string): Promise<Publication[]> {
   const supabase = await createClient();
@@ -120,6 +108,9 @@ export async function listPublicationsForWorkspace(workspaceId: string): Promise
  * @/components/calendar/types directly, never from here.
  */
 export { CALENDAR_PUBLICATION_STATUSES, type CalendarPublicationStatus };
+// MVP-5.36: the system transitions (and their input types) live in the
+// bundle-safe publication-transitions.ts; re-exported for existing importers.
+export { markFailedAsSystem, markPublishedAsSystem, type MarkFailedInput, type MarkPublishedInput } from "@/server/services/publication-transitions";
 
 export type ListPublicationsForCalendarFilters = {
   /** Inclusive ISO instant — half-open range [start, end). */
@@ -443,26 +434,6 @@ export async function markPublishingAsSystem(
   return updatePublicationRow(client, workspaceId, publicationId, { status: "publishing" });
 }
 
-export type MarkPublishedInput = {
-  externalPublicationId: string;
-  externalUrl: string | null;
-  providerResponse: Record<string, unknown>;
-};
-
-/**
- * Transitions a publication to 'published'. Only publishing → published is
- * allowed — enforced by enforce_publication_lifecycle_transitions.
- */
-function publishedFields(result: MarkPublishedInput): Database["public"]["Tables"]["publications"]["Update"] {
-  return {
-    status: "published",
-    published_at: new Date().toISOString(),
-    external_publication_id: result.externalPublicationId,
-    external_url: result.externalUrl,
-    provider_response: result.providerResponse,
-  };
-}
-
 export async function markPublished(
   workspaceId: string,
   publicationId: string,
@@ -472,34 +443,6 @@ export async function markPublished(
   return updatePublicationRow(await createClient(), workspaceId, publicationId, publishedFields(result));
 }
 
-/** Trusted-system counterpart of markPublished — see module header comment. */
-export async function markPublishedAsSystem(
-  client: SupabaseClient<Database>,
-  workspaceId: string,
-  publicationId: string,
-  result: MarkPublishedInput,
-): Promise<Publication> {
-  return updatePublicationRow(client, workspaceId, publicationId, publishedFields(result));
-}
-
-export type MarkFailedInput = {
-  errorCode: string;
-  errorMessage: string;
-  providerResponse?: Record<string, unknown>;
-};
-
-/**
- * Transitions a publication to 'failed'. Only publishing → failed is
- * allowed — enforced by enforce_publication_lifecycle_transitions.
- */
-function failedFields(failure: MarkFailedInput): Database["public"]["Tables"]["publications"]["Update"] {
-  return {
-    status: "failed",
-    error_code: failure.errorCode,
-    error_message: failure.errorMessage,
-    provider_response: failure.providerResponse ?? {},
-  };
-}
 
 /**
  * MVP-2.6 side effect of a successful failed-transition: create a
@@ -538,14 +481,3 @@ export async function markFailed(
   return publication;
 }
 
-/** Trusted-system counterpart of markFailed — see module header comment. */
-export async function markFailedAsSystem(
-  client: SupabaseClient<Database>,
-  workspaceId: string,
-  publicationId: string,
-  failure: MarkFailedInput,
-): Promise<Publication> {
-  const publication = await updatePublicationRow(client, workspaceId, publicationId, failedFields(failure));
-  await notifyFailureSideEffect(publication, failure);
-  return publication;
-}

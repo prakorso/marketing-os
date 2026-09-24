@@ -247,6 +247,61 @@ export async function resolveUnknownAsNotPublished(
   return { resolved: true, evidence };
 }
 
+export type ConfirmedNotPublishedInput = {
+  attemptId: string;
+  /** Must be exactly this literal: an explicit, confirmed not-published determination. */
+  confirmation: "confirmed_not_published";
+  /** Where the confirmation evidence lives (operator review record / evidence file). */
+  evidenceRef: string;
+};
+
+export type CloseUnknownResult =
+  | { kind: "closed_not_published"; attemptId: string }
+  | { kind: "refused"; reason: string };
+
+/**
+ * MVP-5.36 (B7) — closes an outcome_unknown publication as failed ONLY on
+ * an explicit, confirmed not-published determination (e.g. an operator who
+ * verified the account has no such post). NEVER calls the provider and is
+ * never invoked by the unattended runtime. Fail-closed: the publication
+ * must be 'publishing' and the named attempt must be its LATEST attempt, at
+ * outcome_unknown. The terminal attempt row is not modified (immutable
+ * history); the publication gets error_code 'publish_outcome_unknown' with
+ * the confirmation provenance.
+ */
+export async function closeUnknownAsNotPublished(
+  workspaceId: string,
+  publicationId: string,
+  input: ConfirmedNotPublishedInput,
+  deps: Pick<ReconcileDeps, "client" | "attempts" | "markFailed">,
+): Promise<CloseUnknownResult> {
+  if (input.confirmation !== "confirmed_not_published") return { kind: "refused", reason: "missing_confirmation" };
+  if (typeof input.evidenceRef !== "string" || input.evidenceRef.trim() === "") return { kind: "refused", reason: "missing_evidence_ref" };
+
+  let publication: Awaited<ReturnType<typeof loadPublication>>;
+  try {
+    publication = await loadPublication(deps.client, workspaceId, publicationId);
+  } catch {
+    return { kind: "refused", reason: "publication_not_found" };
+  }
+  if (publication.status !== "publishing") return { kind: "refused", reason: `publication_${publication.status}` };
+  const attempts = await deps.attempts.listForPublication(workspaceId, publicationId);
+  const latest = attempts[attempts.length - 1];
+  if (!latest || latest.id !== input.attemptId) return { kind: "refused", reason: "attempt_not_latest" };
+  if (latest.stage !== "outcome_unknown") return { kind: "refused", reason: `attempt_stage_${latest.stage}` };
+
+  await deps.markFailed(workspaceId, publicationId, {
+    errorCode: "publish_outcome_unknown",
+    errorMessage: "Publish outcome was unknown; closed as not published after explicit confirmation",
+    providerResponse: {
+      attemptId: latest.id,
+      reconciliation: "confirmed_not_published",
+      evidenceRef: input.evidenceRef,
+    },
+  });
+  return { kind: "closed_not_published", attemptId: latest.id };
+}
+
 /** Instagram media ids are non-empty digit strings, kept lossless (never coerced through Number). */
 export function isInstagramMediaId(value: unknown): value is string {
   return typeof value === "string" && /^[0-9]+$/.test(value);
