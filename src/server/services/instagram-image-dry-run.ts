@@ -1,5 +1,3 @@
-import "server-only";
-
 import type { ContainerPreparationProvider } from "@/lib/social/provider";
 import {
   prepareReadyContainer,

@@ -1,10 +1,8 @@
-import "server-only";
-
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { ContainerPreparationProvider, ProviderFailureDetails } from "@/lib/social/provider";
-import type { MarkFailedInput } from "@/server/services/publications";
-import { validateImagePublishEligibility } from "@/server/services/publication-media";
+import type { MarkFailedInput } from "@/server/services/publication-transitions";
+import { validateImagePublishEligibility } from "@/server/services/publication-media-rules";
 import { ExecutionDeadline, type ExecutionBudgetConfig } from "@/server/services/publish-execution-budget";
 import type { Asset, ContentVariant, Database, Publication, PublicationAttempt, PublicationAttemptStage, SocialAccount } from "@/types/database";
 
@@ -112,7 +110,25 @@ export type PrepareDeps = {
   pollIntervalMs?: number;
   pollBudgetMs?: number;
   log?: (line: string) => void;
+  /**
+   * MVP-5.36 (Decision #44) kill-switch re-check, consulted immediately
+   * before each provider MUTATION: before the container is created (G1)
+   * and immediately before the publish request (G3). Anything but a
+   * resolved `true` — false, a throw — stops the run as known-not-published.
+   * Omitted (operator / legacy paths) = no extra check.
+   */
+  beforeProviderMutation?: (step: "container_create" | "media_publish") => Promise<boolean>;
 };
+
+/** Fail-closed evaluation of the optional kill-switch hook. */
+export async function providerMutationAllowed(deps: Pick<PrepareDeps, "beforeProviderMutation">, step: "container_create" | "media_publish"): Promise<boolean> {
+  if (!deps.beforeProviderMutation) return true;
+  try {
+    return (await deps.beforeProviderMutation(step)) === true;
+  } catch {
+    return false;
+  }
+}
 
 export type RunHelpers = {
   deadline: ExecutionDeadline;
@@ -231,6 +247,11 @@ export async function prepareReadyContainer(ctx: StagedPublishContext, deps: Pre
     attempt = await deps.attempts.update(workspaceId, attempt.id, { media_asset_ids: [eligibility.asset.id] });
   } catch {
     return stop("checkpoint_failed", "Could not record the submitted media before container creation");
+  }
+
+  // Decision #44 (B): runtime control re-check before G1 (and before signing).
+  if (!(await providerMutationAllowed(deps, "container_create"))) {
+    return stop("runtime_disabled_before_create", "Runtime publishing was switched off before container creation; no provider request was made");
   }
 
   let signedUrl: string;

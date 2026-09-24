@@ -116,6 +116,11 @@ describe.skipIf(!hasLocalSupabase)("claim_due_publications — due-selection, co
     return data.id;
   }
 
+  // "Due" is decided by the DATABASE clock (scheduled_at <= now()). A 1 s
+  // host-relative margin flaked whenever the local DB clock lagged the host;
+  // 5 minutes is far beyond any realistic host/DB skew.
+  const dueAt = () => new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
   afterAll(async () => {
     if (createdWorkspaceIds.length > 0) {
       await admin.from("publications").delete().in("workspace_id", createdWorkspaceIds);
@@ -137,7 +142,7 @@ describe.skipIf(!hasLocalSupabase)("claim_due_publications — due-selection, co
 
   it("2. claims a due scheduled publication", async () => {
     const fixture = await createWorkspaceWithApprovedVariant("Due");
-    const id = await insertPublication(fixture, { scheduledAt: new Date(Date.now() - 1000).toISOString() });
+    const id = await insertPublication(fixture, { scheduledAt: dueAt() });
 
     const { data, error } = await vaultAdmin.rpc("claim_due_publications", { p_batch_size: 50 });
     expect(error).toBeNull();
@@ -163,7 +168,7 @@ describe.skipIf(!hasLocalSupabase)("claim_due_publications — due-selection, co
     const fixture = await createWorkspaceWithApprovedVariant("Draft");
     const id = await insertPublication(fixture, {
       status: "draft",
-      scheduledAt: new Date(Date.now() - 1000).toISOString(),
+      scheduledAt: dueAt(),
     });
 
     const { data, error } = await vaultAdmin.rpc("claim_due_publications", { p_batch_size: 50 });
@@ -200,7 +205,7 @@ describe.skipIf(!hasLocalSupabase)("claim_due_publications — due-selection, co
   it("6. respects the batch size limit", async () => {
     const fixture = await createWorkspaceWithApprovedVariant("Batch");
     const ids = await Promise.all(
-      Array.from({ length: 5 }, () => insertPublication(fixture, { scheduledAt: new Date(Date.now() - 1000).toISOString() })),
+      Array.from({ length: 5 }, () => insertPublication(fixture, { scheduledAt: dueAt() })),
     );
 
     const { data, error } = await vaultAdmin.rpc("claim_due_publications", { p_batch_size: 3 });
@@ -216,7 +221,7 @@ describe.skipIf(!hasLocalSupabase)("claim_due_publications — due-selection, co
 
   it("7. two concurrent claim attempts cannot claim the same publication", async () => {
     const fixture = await createWorkspaceWithApprovedVariant("Concurrent");
-    const id = await insertPublication(fixture, { scheduledAt: new Date(Date.now() - 1000).toISOString() });
+    const id = await insertPublication(fixture, { scheduledAt: dueAt() });
 
     const [first, second] = await Promise.all([
       vaultAdmin.rpc("claim_due_publications", { p_batch_size: 10 }),
@@ -233,8 +238,8 @@ describe.skipIf(!hasLocalSupabase)("claim_due_publications — due-selection, co
   it("8. handles publications in multiple workspaces independently in one claim call", async () => {
     const fixtureA = await createWorkspaceWithApprovedVariant("MultiA");
     const fixtureB = await createWorkspaceWithApprovedVariant("MultiB");
-    const idA = await insertPublication(fixtureA, { scheduledAt: new Date(Date.now() - 1000).toISOString() });
-    const idB = await insertPublication(fixtureB, { scheduledAt: new Date(Date.now() - 1000).toISOString() });
+    const idA = await insertPublication(fixtureA, { scheduledAt: dueAt() });
+    const idB = await insertPublication(fixtureB, { scheduledAt: dueAt() });
 
     const { data, error } = await vaultAdmin.rpc("claim_due_publications", { p_batch_size: 50 });
     expect(error).toBeNull();
@@ -248,7 +253,7 @@ describe.skipIf(!hasLocalSupabase)("claim_due_publications — due-selection, co
 
   it("9. a claimed row remains protected by the lifecycle trigger against further invalid transitions", async () => {
     const fixture = await createWorkspaceWithApprovedVariant("PostClaimGate");
-    const id = await insertPublication(fixture, { scheduledAt: new Date(Date.now() - 1000).toISOString() });
+    const id = await insertPublication(fixture, { scheduledAt: dueAt() });
 
     await vaultAdmin.rpc("claim_due_publications", { p_batch_size: 50 });
 
@@ -265,7 +270,7 @@ describe.skipIf(!hasLocalSupabase)("claim_due_publications — due-selection, co
 
   it("10. service-role cannot bypass the approval gate: a claim attempt on a row whose approval was superseded is skipped, not claimed", async () => {
     const fixture = await createWorkspaceWithApprovedVariant("Superseded");
-    const id = await insertPublication(fixture, { scheduledAt: new Date(Date.now() - 1000).toISOString() });
+    const id = await insertPublication(fixture, { scheduledAt: dueAt() });
 
     // Supersede the earlier approval with a later rejection in its own
     // statement/transaction so it gets a strictly later created_at.

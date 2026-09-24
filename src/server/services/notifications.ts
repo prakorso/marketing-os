@@ -2,6 +2,7 @@ import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
+import { insertPublicationFailedNotification } from "@/server/services/publication-transitions";
 import type { Notification } from "@/types/database";
 
 /**
@@ -51,31 +52,7 @@ export type NotifyPublicationFailedInput = {
  * keys, or raw provider_response.
  */
 export async function notifyPublicationFailed(input: NotifyPublicationFailedInput): Promise<Notification | null> {
-  if (!input.recipientUserId) {
-    return null;
-  }
-
-  const client = createServiceRoleClient();
-  const { data, error } = await client
-    .from("notifications")
-    .insert({
-      workspace_id: input.workspaceId,
-      user_id: input.recipientUserId,
-      type: "publication_failed",
-      title: "Publication failed",
-      message: `Your publication failed to send: ${input.errorMessage}`,
-      data: {
-        publication_id: input.publicationId,
-        error_code: input.errorCode,
-      },
-    })
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to create publication-failed notification: ${error.message}`);
-  }
-  return data;
+  return insertPublicationFailedNotification(createServiceRoleClient(), input);
 }
 
 /**
