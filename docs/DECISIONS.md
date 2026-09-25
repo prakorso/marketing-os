@@ -906,3 +906,42 @@ verified in H3.
   `reconcile_stale_runtime_publications(p_stale_seconds)` remain until the
   hardened runtime is merged, deployed de-armed, and proven by controlled
   staging evidence. Their retirement is a separate, later migration.
+- **Verification record (MVP-5.36 H4–H6).** The locked text above is
+  unchanged; this bullet records the evidence for closing MVP-5.36 Level-6
+  runtime hardening (H0–H6).
+  - Release: PR #3 merged as `be81631` (CI 830/830). Migration
+    `20260926120000_runtime_hardening_lease_resume.sql` applied to hosted
+    staging. The hardened runtime was first deployed de-armed; natural runs
+    failed closed at the missing DB control (H5).
+  - Hosted controlled dry run (H6, Decision #44 Phase 2), natural scheduler
+    only:
+    - exactly one lease holder, one claimed publication, one attempt and
+      one container;
+    - container creation 1, status reads 2, publish requests 0;
+    - publication and attempt terminal `failed` /
+      `dry_run_container_ready`;
+    - `publish_requested` never reached; no external publication id, no
+      `published_at`, no public Instagram publication.
+    - The container was ready within the first invocation, so cross-slot
+      resume was not exercised on hosted staging. Resume safety rests on the
+      H2/H3 local adversarial suite.
+  - Kill and de-arm: deleting the DB control stopped the runtime, and the
+    next natural runs failed closed. The allowlist was then removed, the env
+    gate unset, and the same source redeployed; at least two further natural
+    runs were no-ops. Final staging state: control absent, allowlist empty,
+    env gate absent, nothing due or publishing.
+  - Scope:
+    - MVP-5.36 Level-6 runtime hardening (H0–H6) is technically closed.
+    - Phase 2 controlled dry-run is proven on the hardened hosted runtime.
+    - Phase 3 publish mode remains separately authorized and has not been
+      proven by this closure record.
+    - Phase 4 and Level 7 have not started.
+  - The v1 RPC retirement precondition above is now met. Retirement remains
+    a separate, owner-authorized migration.
+  - Open, not resolved by this record:
+    - the G3 timeout is untested on hosted staging (dry run);
+    - READINESS_MAX remains provisional, with limited long-tail evidence;
+    - the lease-row retention policy;
+    - runbook naming for the renamed runtime outcomes;
+    - OAuth state signing (required before Phase 4);
+    - the `publication_attempts` ACL residual.
