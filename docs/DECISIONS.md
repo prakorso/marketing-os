@@ -835,3 +835,74 @@ supersedes it ONLY where it concerns unattended runtime publishing.
   - Unknown outcomes: `outcome_unknown` is closed only by the explicit
     operator path `closeUnknownAsNotPublished` (confirmed not published,
     with an evidence reference). The runtime never closes one.
+
+## 45. Hardened Level-6 Runtime Contract (MVP-5.36 H0–H3)
+
+Owner-approved (Panji, MVP-5.36H0, Option C). Extends Decision #44 for the
+unattended runtime. Decision #44 still applies (dual gate, fail-closed
+control, provider-free reconciliation, release atomicity, phases). Where
+the two differ on runtime execution, this decision governs. It records the
+contract implemented in MVP-5.36 H1 (database) and H2 (runtime) and
+verified in H3.
+
+- **Delivery model.** Scheduler delivery is treated as AT-LEAST-ONCE.
+  Duplicate, overlapping, late and retried invocations are expected (P2-C
+  observed two invocations in one slot). Safety never depends on the
+  scheduler invoking exactly once.
+- **Slot lease.** The logical slot is derived from the DATABASE clock
+  (5-minute bins). Exactly one DB lease holder per slot may work; all other
+  deliveries of that slot are suppressed, provider-free and mutation-free
+  apart from a duplicate counter, before any reconciliation. A lease is
+  valid for its holder for 60 s. While an uncompleted lease is younger than
+  60 s, no new slot may be acquired (cross-slot overlap guard). Leases are
+  never stolen or deleted by the runtime. Lease completion is evidence, not
+  permission to replay any side effect.
+- **Order.** DB control, then the env gate (either OFF: return, with no
+  lease and no mutation). Then the lease, then provider-free reconciliation
+  (holder only), then work selection, load and eligibility, control
+  re-checks, one Vault read, the engine, audit, lease completion and the
+  final log.
+- **Single flight.** At most one publication is in runtime flight per
+  runtime key. Work selection is RESUME ELSE CLAIM ELSE NONE, enforced by
+  the database: the claim refuses while any runtime publication is
+  'publishing'. An `outcome_unknown` publication stays 'publishing' and
+  therefore blocks new claims until an operator explicitly resolves it.
+  Safety takes precedence over throughput.
+- **Container creation (G1).** A durable pre-G1 marker
+  (`container_create_requested_at`) is committed before dispatch. The DB
+  control, mode, env gate and budget are re-checked immediately before
+  dispatch. Only an authoritative structured rejection is a known failure.
+  Any ambiguous outcome (timeout, transport, 5xx, malformed) closes the
+  attempt known-not-published and is NEVER retried automatically. No
+  publish request can target an unrecorded container.
+- **Resumability.** Container processing may span invocations for up to
+  READINESS_MAX (15 min, provisional). `container_created` and
+  `container_ready` are durable, resumable states. The recorded container
+  id is authoritative: a resume never creates another container or
+  another attempt. Past READINESS_MAX the provider-free reconciler closes
+  the attempt known-not-published.
+- **Runtime control.** The control is re-checked throughout execution:
+  after selection, before Vault, before and immediately at G1 dispatch,
+  before every status poll, before the publish checkpoint, and immediately
+  before G3. A mode change counts as disabled for that invocation. OFF
+  prevents the next provider mutation and preserves resumable state.
+- **Dry run.** In `dry_run` the engine has no publish capability.
+- **Publish (G3).** `publish_requested` is the irreversible checkpoint and
+  is committed before dispatch. G3 requires `container_ready`, the
+  recorded container id, publish mode, the env gate, a still-held lease,
+  and the full timeout plus persistence reserve. An ambiguous G3 outcome
+  is `outcome_unknown` and is NEVER retried. A success persists the attempt
+  first, then the publication. A persistence failure after success carries
+  the known media id to reconciliation.
+- **Budget.** The internal runtime budget is 25 s (the platform ceiling is
+  30 s). A provider call starts only if its full timeout (G1 10 s, G3 8 s,
+  status ≤ 5 s) plus the 3 s persistence reserve fits. Budget exhaustion
+  defers and preserves resumable state where safe. The 60 s lease validity
+  is never used as execution budget.
+- **Recovery.** Stale recovery is owned by the provider-free reconciler,
+  which runs on the database clock and only for the lease holder. Unknown
+  publication outcomes require human/operator resolution.
+- **v1 RPCs.** The pre-hardening `claim_runtime_publications(p_cap)` and
+  `reconcile_stale_runtime_publications(p_stale_seconds)` remain until the
+  hardened runtime is merged, deployed de-armed, and proven by controlled
+  staging evidence. Their retirement is a separate, later migration.

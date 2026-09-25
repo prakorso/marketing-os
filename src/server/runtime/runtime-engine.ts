@@ -238,6 +238,17 @@ export async function runNewWork(ctx: EngineContext, assets: Asset[], deps: Engi
     return failKnown(run, "checkpoint_failed", "Could not record the container request marker; no provider request was made");
   }
 
+  // H3 fix: re-check immediately before dispatch (after the marker commit), as for G3. The earlier
+  // checks can be stale by the time signing and the marker write have completed.
+  if (!(await deps.allowed("container_create"))) {
+    signedUrl = "";
+    return failKnown(run, "runtime_disabled_before_create", "Runtime publishing was switched off before container creation; no provider request was made");
+  }
+  if (!deps.budget.canStart(g1TimeoutMs)) {
+    signedUrl = "";
+    return failKnown(run, "execution_budget_exhausted", "Not enough execution time to create the container; no provider request was made");
+  }
+
   deps.emit("g1_dispatch", { publicationId: publication.id, attemptId: run.attempt.id, remainingMs: Math.round(deps.budget.remainingMs()) });
   const created = await deps.provider.createMediaContainer({
     credential: ctx.credential,
