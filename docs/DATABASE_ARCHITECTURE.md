@@ -1,8 +1,19 @@
-# Marketing Operating System — Database Architecture
+# MARQOS — Marketing Operating System — Database Architecture
 
-**Version:** 1.1
-**Status:** Canonical specification — pending explicit approval
-**Date:** 2026-09-15
+**Version:** 1.2
+**Status:** DRAFT — pending Owner approval (Track 0). Supersedes the
+unapproved v1.1 draft (2026-09-15) once approved.
+**Date:** 2026-09-25
+
+**Reality markers used in this document.**
+
+- **EXISTS NOW** — migrated in `supabase/migrations`.
+- **DESIGNED — NOT MIGRATED** — specified here but no table exists.
+- **PLANNED FUTURE** — direction only; no columns are final.
+
+Sections without a marker describe tables that exist. No planned or
+designed entity may be assumed to exist, and none is authorized for
+migration by this document.
 
 ## 1. Database Principles
 
@@ -211,12 +222,15 @@ Primary/unique: `(signal_id, topic_id)`.
 
 ### Intelligence method note
 
-MVP topic grouping (signal → topic) uses AI/provider text classification
-(via the AI Provider Interface — Engineering Blueprint §10) combined with
-relational grouping through `signal_topics`. No vector/embedding
-infrastructure (e.g. `pgvector`) is required for MVP. A vector similarity
-column/index is a documented future extension point (§23), not a current
-dependency of the Intelligence domain.
+Current state (factual correction): the delivered MVP-4 associates
+signals with topics manually through `signal_topics` (Decision #22).
+An earlier version of this note said MVP grouping used AI/provider
+classification; that was the design intent, not what was delivered.
+
+Trend Signal V1 (Decision #48) may add AI classification/clustering, brand
+relevance and interpretation, and may add a vector similarity
+column/index where justified (§23). None of these exists today, and none
+is required until the Trend Signal V1 contract specifies it.
 
 ## 5. Content Domain
 
@@ -538,6 +552,56 @@ no DELETE grant for any API role, identity columns immutable, terminal
 attempts immutable. RLS: members read; only the execution path
 (`service_role`) writes.
 
+Runtime hardening columns (EXISTS NOW; migration
+`20260926120000_runtime_hardening_lease_resume.sql`, Decision #45):
+
+- `container_create_requested_at` — committed before the
+  container-creation request (G1). Set with no recorded container means
+  the G1 outcome is unknown; it is never re-dispatched.
+- `container_created_at` — when the container id was recorded;
+  READINESS_MAX (15 min) is measured from it.
+- `status_poll_count` — integer, ≥ 0, observability only.
+- `last_run_id` — the lease holder that last worked the attempt.
+
+### Runtime publishing controls (EXISTS NOW; Decisions #44, #45)
+
+Migrations `20260925120000_runtime_publishing_controls.sql` and
+`20260926120000_runtime_hardening_lease_resume.sql`. All of these are
+service-role only: RLS enabled, no policies, browser roles revoked.
+
+- `publishing_runtime_control` — the singleton runtime control:
+  - `key` — CHECK `= 'instagram_scheduled_publishing'`;
+  - `enabled` — default false;
+  - `mode` — `dry_run` | `publish`, default `dry_run`;
+  - `note`, `updated_at`.
+  A missing row means OFF.
+- `publishing_runtime_allowlist` — rows of `social_account_id`
+  (PK) and `workspace_id`, with a composite FK to
+  `social_accounts (id, workspace_id)`.
+- `publishing_runtime_slot_lease` — one row per database-clock 5-minute
+  slot:
+  - `runtime_key`, `slot_start` (PK together);
+  - `run_id` (unique), `acquired_at`;
+  - `completed_at` and `outcome`, set together;
+  - `duplicate_count`.
+  Rows are evidence and are never deleted by the runtime.
+- RPCs (SECURITY DEFINER, `service_role` execute only):
+  - `acquire_runtime_slot_lease(p_run_id)`;
+  - `complete_runtime_slot_lease(p_run_id, p_outcome)`;
+  - `select_runtime_resume(p_run_id)`;
+  - `claim_runtime_publications(p_cap, p_run_id)` (v3);
+  - `reconcile_stale_runtime_publications(p_stale_seconds, p_run_id)`
+    (v2).
+  The v1 overloads `claim_runtime_publications(p_cap)` and
+  `reconcile_stale_runtime_publications(p_stale_seconds)` still exist;
+  their retirement needs a separately authorized migration.
+- Owner-only helpers (no API role execute): `runtime_slot_lease_lock()`,
+  `runtime_lease_is_valid_holder(uuid)`,
+  `runtime_control_enabled_mode()`.
+
+These structures are Instagram-keyed; their generalization to other
+providers is Track 5 work (Decision #50).
+
 The calendar is a projection of publications.
 
 ## 9. Analytics Domain
@@ -726,6 +790,9 @@ purpose, so resolution is never ambiguous.
 
 ## 11. Optimization Domain
 
+**DESIGNED — NOT MIGRATED.** No table in this section exists yet. Track 7
+(Learning Loop V1) operationalizes them under its own contract.
+
 ### `insights`
 - `id`
 - `workspace_id`
@@ -787,6 +854,10 @@ record from a different workspace.
 - `updated_at`
 
 ## 12. Automation Domain
+
+**DESIGNED — NOT MIGRATED.** `automations` and `automation_runs` do not
+exist yet. The only production scheduler today is the Instagram runtime
+(§8, runtime publishing controls).
 
 ### `automations`
 - `id`
@@ -1169,4 +1240,50 @@ sets, ads, ad metrics, attribution, conversion events, and experiments.
 
 A vector/embedding column (e.g. `pgvector` on `marqos_signals` or `topics`) for
 semantic similarity search is a documented future extension point for the
-Intelligence domain (§4) and is explicitly not required for MVP.
+Intelligence domain (§4). It is allowed where the Trend Signal V1 contract
+justifies it (Decision #48), and is not required.
+
+## 24. Planned Future Entities (PLANNED FUTURE — NOT MIGRATED)
+
+Direction only. No columns, enums or constraints are final, and no
+migration is authorized by this section. Each item is specified by the
+contract of the track named.
+
+- **Content Idea** (Track 3, Decision #49):
+  - Opportunity 1:N Content Idea;
+  - operator review state (proposed / approved / edited / rejected) and
+    history;
+  - a link from an approved idea to a Brief.
+  The existing optional `content_briefs.opportunity_id` link (EXISTS NOW)
+  remains valid.
+- **Structured creative plans** (Track 4, Decision #49):
+  - per-format structures (single image; carousel slides; video
+    storyboard scenes, script/VO, on-screen text);
+  - likely child records of the brief/creative plan rather than JSON
+    only — to be decided in Track 4.
+- **Trend Signal pipeline records** (Track 2, Decision #48):
+  - connector/ingestion runs;
+  - normalized signal fields kept separate from `raw_data`;
+  - cluster/topic membership provenance;
+  - per-brand relevance.
+  `marqos_signal_sources`, `marqos_signals`, `topics`, `signal_topics` and
+  `opportunities` EXIST NOW and are reused where semantically correct.
+- **Integrations** (Decision #51):
+  - credential metadata per workspace (secret in Vault by reference,
+    write-only);
+  - webhook endpoints and signing secrets;
+  - audit of create/rotate/delete.
+- **Marq** (Decision #52): persisted, workspace-scoped conversations and
+  messages with context/provenance references.
+- **Provider expansion** (Track 5, Decision #50):
+  - `social_platform` + `facebook` (the enum today is `instagram`,
+    `tiktok`, `youtube`, `threads`);
+  - a generalized provider checkpoint and runtime keys.
+- **Credential lifecycle** (Track 1, Decision #47): representation of an
+  account requiring reconnection. The existing `social_account_status`
+  values `expired`/`error` may suffice — to be decided in Track 1.
+
+Explicitly NOT ready for migration:
+- every item in this section until its track contract is approved;
+- embedding columns;
+- paid-media entities (§23).

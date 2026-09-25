@@ -945,3 +945,275 @@ verified in H3.
     - runbook naming for the renamed runtime outcomes;
     - OAuth state signing (required before Phase 4);
     - the `publication_attempts` ACL residual.
+
+## 46. MARQOS Product Governance, Execution Roadmap and Release Gates
+
+Status: DRAFT — pending Owner approval (Track 0). Owner-directed
+(Panji, MARQOS Master Product Roadmap vNext). Relationship: EXTENDS #19
+(the product loop, further extended by #49); SUPERSEDES #20 ONLY as to
+execution ORDER; #18 unchanged.
+
+- **Product name.** The canonical product name is "MARQOS — Marketing
+  Operating System". "MOS" / "Marketing OS" remains a descriptive
+  category name where historically used; it is not the product name.
+- **Hierarchy.** Product → Domains → Capability Versions → Execution
+  Tracks → Work Packages → Release/Rollout Gates.
+  - Domains are the product's parts. The former MVP-0..MVP-4 phases
+    (Foundation, Content, Distribution, Analytics, Intelligence) remain
+    valid as domain descriptions; their order is historical.
+  - A Capability Version (e.g. "Instagram Publishing V1") is the unit of
+    scope and closure, with a locked Definition of Done (DoD).
+  - Execution Tracks 0–8 order the capability versions. The operational
+    roadmap is `docs/ROADMAP.md`.
+  - Work Packages (e.g. MVP-5.34/5.35/5.36, H0–H6) are engineering
+    milestone identifiers, not roadmap levels.
+  - Release/Rollout Gates describe how a capability is proven or rolled
+    out safely (e.g. Decision #44 Phases 0–4).
+- **Execution order.** Track 0 Canon Alignment → 1 Instagram V1 Closure →
+  2 Trend Signal V1 → 3 Content Ideation & Approval V1 → 4 Creative OS V1
+  → 5 Social Expansion → 6 Organic Analytics V1 → 7 Learning Loop V1 →
+  8 Performance Marketing. This supersedes the priority order in #20.
+  #20's rule that performance marketing follows only after the core
+  loop is stable remains in force.
+- **Completion-first.** One major capability version is completed to
+  100% of its locked DoD before execution moves to the next. Parallel
+  work is allowed only if it has no unsafe dependency and does not leave
+  the active capability unfinished. "100%" means: locked scope
+  implemented, acceptance criteria met, verification complete, staging/
+  pilot proof where applicable, blocking bugs fixed, production/live
+  proof where required, and a formal closure record. It does not
+  preclude later versions (V2, V3).
+- **Lifecycle.** DEFINE → IMPLEMENT → VERIFY → STAGING → PILOT → HARDEN →
+  PRODUCTION/LIVE PROOF (where required) → FORMAL CLOSURE → NEXT.
+  Closed milestones are not reopened without a concrete regression, a
+  changed requirement, or an explicit Owner decision.
+- **Release gate classes.** Each capability version's DoD declares its
+  class (the Owner may raise it):
+  - Class I — no external side effect: local verification, automated
+    tests, staging verification, closure record.
+  - Class II — external read integration (ingestion, metrics): Class I
+    plus real-provider staging proof, and a pilot where user-facing.
+  - Class III — external irreversible action (publishing, spend, remote
+    deletion): Class II plus a controlled pilot, a dedicated production
+    environment, production deployment, live proof, an observation
+    period, and a formal closure record.
+- **Terminology.** "Level N" is retired for future roadmap execution. No
+  "Level 7" is defined. Level 4/5/6 in Decisions #43–#45 remain valid
+  historical Instagram rollout terminology.
+- **Documentation versioning.** Canonical documents are amended as a
+  vNext draft, reviewed, approved by the Owner, and only then marked
+  Approved. Decisions remain append-only; later decisions extend,
+  supersede or narrow earlier ones explicitly and never rewrite them.
+
+## 47. Instagram Publishing V1 — Definition of Done
+
+Status: DRAFT — pending Owner approval (Track 0). Relationship: EXTENDS
+#43, #44 and #45 without changing any of their locked text or safety
+contracts (dual gate, fail-closed control, slot lease, single flight, G1
+and G3 boundaries, dry run without publish capability, unknown-outcome
+handling, no automatic provider retry).
+
+Instagram Publishing V1 is a Class III capability version (#46). It
+closes only when all of the following hold.
+
+- **Product flow (non-engineer operator, product UI only).**
+  - Connect Instagram from a normal UI entry point through provider OAuth
+    requesting exactly the scopes V1 needs (publishing and insights),
+    with a signed OAuth state and professional-account validation
+    (Model B, #43). No manual token or provider-id entry in the normal
+    product path.
+  - Create a publication from an approved variant; schedule, reschedule
+    and cancel it. The existing approval gate is unchanged.
+  - Unattended publishing by the hardened runtime (#44/#45) within the
+    allowlist and cap policy.
+  - Publication status visible in the product, including an unknown
+    outcome.
+  - Operator-safe reconciliation of ambiguous outcomes through a product
+    path, preserving #43's rules (no automatic retry, no auto-finalize
+    from heuristic evidence).
+- **Runtime proof.** #44 Phase 3 — one separately authorized,
+  allowlisted real scheduled publication through the hardened hosted
+  runtime in publish mode — with its evidence recorded (including the G3
+  timeout and budget, open under #45).
+- **Credential lifecycle (minimum).** Detect an invalid or expired
+  credential; represent the account as requiring reconnection; prevent
+  publish attempts with an invalid credential; provide a normal operator
+  reconnect path. Automated long-lived-token refresh is not required for
+  V1 and does not exist today.
+- **Production prerequisites.** A dedicated MARQOS production
+  environment that does not reuse the shared staging Supabase project:
+  its own Supabase project, Netlify/environment configuration, secrets,
+  production OAuth/provider configuration, and runtime controls.
+  Provider access for publishing on the production accounts is
+  confirmed. The `publication_attempts` ACL residual (#44) is resolved
+  or explicitly accepted by the Owner for V1. An operator runbook covers
+  the kill switch, allowlist, reconciliation and outcome names.
+- **Minimal metrics slice.** Published Instagram publication → metrics
+  sync (scheduled or operator-triggered) → `publication_metric_snapshots`,
+  through the existing adapter → normalizer → service path (#32–#42).
+  This is NOT Organic Analytics V1: cross-provider analytics, a derived
+  score (#31 remains open), insights and new dashboards are out of V1.
+- **Production/live proof.** One controlled production publication
+  through the product path, a metrics snapshot captured for it, and a
+  72-hour observation period with no closure-blocking issue: no
+  duplicate or unexpected publication, no unresolved ambiguous outcome,
+  no unsafe retry behavior, no critical runtime regression, and no
+  critical security regression attributable to the V1 flow. No repeated
+  publication is required to fill the window. A closure-blocking
+  incident requires fix → verify → a restarted 72-hour window.
+- **V1 production proof is not Phase 4.** The controlled production proof
+  does NOT begin or authorize #44 Phase 4 (bounded/wider rollout), which
+  remains separately authorized.
+- **Closure.** A formal V1 closure record is appended to this decision.
+- **Allowed after closure (technical debt).** v1 runtime RPC retirement,
+  the lease-row retention policy, READINESS_MAX refinement, consolidation
+  of the legacy staged path, known test-timing flakes, and cap = 1.
+- **Instagram V2 (deferred).** Carousel and Reel publishing; PNG/WebP
+  conversion where still deferred; rollout beyond the V1 policy (cap > 1,
+  more accounts); advanced analytics; automated token refresh if later
+  required and approved.
+
+## 48. Intelligence AI and Trend Signal
+
+Status: DRAFT — pending Owner approval (Track 0). Relationship: EXTENDS
+#21 (AI beyond content generation); SUPERSEDES #22 going forward as to
+"manual Signal → Topic association remains the complete MVP-4" and "AI
+Topic Classification is not pursued" (both remain the accurate record of
+the delivered MVP-4); NARROWS #28 by making the Trend Signal V1 contract
+the approval path for intelligence AI traceability; #11 unchanged.
+
+- **Permitted AI.** MARQOS AI may classify signals, cluster them, detect
+  trends, assess brand relevance, interpret trends, propose
+  opportunities and propose content ideas, and later support insight and
+  recommendation functions — always through the AI Provider Interface
+  (Engineering Blueprint §10).
+- **Advisory, human-gated.** AI output is advisory wherever human
+  judgment or approval is required. No autonomous, unrestricted
+  marketing decision is introduced.
+- **Trend Signal pipeline.** External multi-source signals → ingestion →
+  normalization → detection/clustering → brand relevance → AI
+  interpretation → Opportunity. A signal never directly equals content;
+  opportunities lead to Content Ideas (#49). Existing Signal, Topic,
+  Opportunity, Brand Voice, Audience Profile and Content Pillar
+  structures are reused where semantically correct.
+- **Embeddings.** Embedding/vector techniques, including `pgvector`, are
+  allowed where justified; they are not required for Trend Signal V1.
+- **Scoring.** Opportunity scoring stays undefined (#22) until the Trend
+  Signal V1 contract defines it; no score may be presented as meaningful
+  before then.
+- **Credentials.** Trend Signal V1 prefers platform-managed source
+  credentials (#23). A minimal Integrations slice (#51) may accompany it
+  only if a chosen source genuinely requires per-workspace credentials.
+- **Unchanged.** #11 (Signal/Topic/Opportunity separation), #24 (AI data
+  access), #25–#27 (AI job semantics), and #22's statement that Analysis
+  starts deterministic/rule-based.
+
+## 49. Content Idea, Ideation Approval and Creative Format Model
+
+Status: DRAFT — pending Owner approval (Track 0). Relationship: EXTENDS
+#19 (the loop gains Content Idea); CLARIFIES the PRD non-goal "advanced
+video generation"; #6 and #7 unchanged.
+
+- **Loop.** Signal → Topic → Opportunity → Content Idea → Brief → Content
+  → Version → Variant → Publication → Metrics → Insight → Recommendation
+  → Next Action / New Content.
+- **Content Idea.** A first-class concept between Opportunity and Brief,
+  distinct from a Brief in semantics and lifecycle. An Opportunity may
+  have one or more Content Ideas. AI may propose ideas; an operator
+  reviews them (approve / edit / reject); only an approved idea may
+  progress from ideation to a Brief. Briefs authored directly by an
+  operator, and the existing optional brief → opportunity link, remain
+  valid. The idea → brief linkage and the schema are defined in the
+  Track 3 contract, not here.
+- **Creative format model (Creative OS).** Structured creative planning
+  is in scope:
+  - single image: headline/copy, visual concept/direction, caption, CTA;
+  - carousel: slide structure, per-slide purpose/copy/direction, CTA;
+  - video: storyboard, scenes, hook, visual direction, script/VO,
+    on-screen text, CTA.
+  Autonomous/advanced video generation remains out of scope unless
+  separately authorized.
+- **Format ≠ publishability.** A creative format does not imply that a
+  provider can publish it. Provider capabilities (#50) decide; for
+  example, Instagram carousel and Reel publishing remain Instagram V2
+  (#47).
+- **Unchanged.** Version immutability, the content approval record, and
+  the publication approval gate (Engineering Blueprint §17; Database
+  Architecture §17).
+
+## 50. Connected Assets and Social Provider Capability Model
+
+Status: DRAFT — pending Owner approval (Track 0). Relationship: EXTENDS
+#13 and Engineering Blueprint §16; #15 unchanged.
+
+- **Connected Assets** is a product capability. Normal UX is OAuth-first:
+  Create Workspace → Add Brand → Connect Asset → Provider OAuth → Select /
+  Validate Account → Connected. Users never manage provider access
+  tokens, refresh tokens, provider account IDs or client secrets.
+- **OAuth state** is signed and bound to the initiating workspace/user
+  context.
+- **Development tooling.** Manual credential entry may remain only as
+  development tooling isolated from the normal product UX.
+- **Credentials** stay in Supabase Vault, referenced by
+  `social_accounts.vault_secret_id` (unchanged). Connected Assets builds on
+  the existing `social_accounts` model and preserves tenant isolation for
+  multi-workspace / multi-brand use (`social_accounts.brand_id`).
+- **Provider capability contracts.** Shared publication infrastructure is
+  reused where semantically safe, but no provider is assumed to share
+  Instagram's container lifecycle, processing semantics, media types,
+  OAuth model or publication states. Each provider declares its
+  capabilities (auth, account model, formats, publish semantics,
+  processing states, metrics availability, limits).
+- **Providers.** Planned: Instagram, Facebook, Threads, TikTok, YouTube.
+  Facebook is added to the provider roadmap; its enum/schema/provider
+  work is deferred to its own Track 5 capability version. Each provider
+  closes as its own versioned capability.
+- **Unchanged.** No separate core content model per platform (#13).
+
+## 51. Integrations and API Credentials
+
+Status: DRAFT — pending Owner approval (Track 0). Relationship:
+EXTENDS/NARROWS #23 — the platform-managed, server-side key remains the
+default, and workspace-scoped or bring-your-own-key credentials become
+permitted ONLY through the Integrations capability; #15 unchanged.
+
+- **Distinct capability.** Integrations / API Credentials is separate from
+  Connected Assets (#50). Normal social OAuth is never replaced by manual
+  API-key entry.
+- **Philosophy.** MARQOS-managed/platform credentials where practical;
+  optional workspace-scoped credentials where a connector or service
+  legitimately requires them. Future Settings areas: AI Providers,
+  External Services, API Credentials, Webhooks.
+- **Security rules.**
+  - write-only secrets from the user's perspective; plaintext is never
+    re-displayed after storage;
+  - service-role-only retrieval at execution time;
+  - workspace isolation, with RLS on credential metadata;
+  - rotation and revocation;
+  - audit on create, rotate and delete;
+  - no secrets in logs;
+  - webhook signing secrets.
+  Existing Supabase Vault patterns are reused where appropriate.
+- **Unchanged.** No secrets in Git (#15); server-side-only credentials;
+  the platform key as the default.
+
+## 52. Marq — Horizontal Marketing Copilot
+
+Status: DRAFT — pending Owner approval (Track 0). Relationship: NEW;
+references #12, #23/#51, #44/#45 and PRD §11.
+
+- **Horizontal.** Marq is a marketing intelligence/copilot layer across
+  MARQOS, not a stage of the product loop.
+- **Surfaces.** A dedicated conversational/copilot page, and contextual
+  presence in relevant surfaces (Signals, Opportunities, Content,
+  Analytics, Recommendations).
+- **Data.** Conversations are persisted and workspace-scoped. Marq uses
+  only RLS-authorized workspace/brand context.
+- **Credentials.** Platform-managed model/provider credentials initially;
+  future BYOK only through Integrations (#51).
+- **Boundaries.** Marq must not bypass human content approval or
+  publishing safety, and must not publish autonomously unless a future
+  explicit automation contract authorizes it.
+- **Timing.** Design is canonical now. The first real product surface is
+  built only when the underlying entities are useful (expected after the
+  Trend Signal and Content Ideation foundations).

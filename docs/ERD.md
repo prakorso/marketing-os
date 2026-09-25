@@ -1,8 +1,13 @@
-# Marketing Operating System — Entity Relationship Diagram
+# MARQOS — Marketing Operating System — Entity Relationship Diagram
 
-**Version:** 1.1
-**Status:** Canonical specification — pending explicit approval
-**Date:** 2026-09-15
+**Version:** 1.2
+**Status:** DRAFT — pending Owner approval (Track 0). Supersedes the
+unapproved v1.1 draft (2026-09-15) once approved.
+**Date:** 2026-09-25
+
+**Reality markers.** EXISTS NOW = migrated; DESIGNED — NOT MIGRATED =
+specified but no table exists; PLANNED FUTURE = direction only (Database
+Architecture §24). Unmarked entities exist.
 
 ## 1. ERD Purpose
 
@@ -194,6 +199,18 @@ hard-deleted.
 raw credential is stored in the relational schema (Database Architecture
 §8).
 
+### 9c. Runtime Publishing Controls (EXISTS NOW; Decisions #44, #45)
+
+```text
+publishing_runtime_control      (singleton, key 'instagram_scheduled_publishing')
+publishing_runtime_allowlist ──── social_accounts (1:1 optional, composite FK (id, workspace_id))
+publishing_runtime_slot_lease   (one row per DB-clock 5-minute slot; run_id unique)
+publication_attempts.last_run_id ··· slot_lease.run_id (logical reference, no FK)
+```
+
+All three are service-role only (RLS enabled, no policies) and
+Instagram-keyed. See Database Architecture §8.
+
 ### 9b. Publication Attempts (provider checkpoint)
 
 ```text
@@ -260,6 +277,9 @@ overwritten.
 
 ## 12. Optimization ERD
 
+**DESIGNED — NOT MIGRATED** (Track 7). The relationships below are the
+design; no table exists yet.
+
 ```text
 insights ──── brands (N:1 optional, composite-FK tenant-checked)
    ├── 1:N → insight_evidence
@@ -318,6 +338,9 @@ against.
 
 ## 14. Automation ERD
 
+**DESIGNED — NOT MIGRATED.** The relationships below are the design; no
+table exists yet.
+
 ```text
 workspaces
     │ 1:N
@@ -374,7 +397,9 @@ TOPIC
      ↓
 OPPORTUNITY
      ↓
-CONTENT BRIEF
+CONTENT IDEA  [PLANNED FUTURE — Track 3; operator approve/edit/reject]
+     ↓
+CONTENT BRIEF  (may also be authored directly; optional opportunity link EXISTS NOW)
      ↓
 CONTENT ──── brand
      ↓
@@ -390,12 +415,15 @@ METRIC SNAPSHOT
      ↓
 PERFORMANCE SCORE (scope: publication | content)
      ↓
-INSIGHT
+INSIGHT  [DESIGNED — NOT MIGRATED]
      ├── EVIDENCE (typed: signal | topic | opportunity | content | publication | metric_snapshot)
-     └── RECOMMENDATION
+     └── RECOMMENDATION  [DESIGNED — NOT MIGRATED]
               ↓
-          NEW CONTENT
+          NEXT ACTION / NEW CONTENT (new content idea or brief)
 ```
+
+The loop matches PRD §1 and Decision #49. Marq (Decision #52) is a
+horizontal layer, not a stage in this flow.
 
 ## 18. Complete Entity List
 
@@ -413,7 +441,9 @@ content_briefs, content, content_versions, content_variants, marqos_assets,
 marqos_content_assets, marqos_content_variant_assets, content_approvals
 
 ### Distribution
-social_accounts, publications, publication_attempts
+social_accounts, publications, publication_attempts,
+publishing_runtime_control, publishing_runtime_allowlist,
+publishing_runtime_slot_lease
 
 ### Analytics
 publication_metric_snapshots, content_performance_scores
@@ -421,10 +451,10 @@ publication_metric_snapshots, content_performance_scores
 ### AI
 ai_jobs, ai_usage, prompt_versions
 
-### Optimization
+### Optimization — DESIGNED — NOT MIGRATED
 insights, insight_evidence, recommendations
 
-### Automation
+### Automation — DESIGNED — NOT MIGRATED
 automations, automation_runs
 
 ### System
@@ -433,7 +463,17 @@ audit_logs, notifications
 No new entities were introduced while resolving the specification gaps —
 all changes are new columns/constraints on existing entities.
 
+### Planned future — NOT MIGRATED (Database Architecture §24)
+Content Idea; structured creative plans; Trend Signal pipeline records;
+integration credential metadata and webhooks; Marq conversations and
+messages; `social_platform` value `facebook`; generalized provider
+checkpoint. None exists and none is authorized for migration.
+
 ## 19. Cardinality Lock
+
+Rows involving `insights`, `insight_evidence`, `recommendations`,
+`automations` and `automation_runs` describe DESIGNED — NOT MIGRATED
+entities.
 
 | Relationship | Cardinality |
 |---|---|
