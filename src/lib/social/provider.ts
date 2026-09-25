@@ -92,9 +92,16 @@ export type ProviderFailureDetails = {
   fbtraceId: string | null;
 };
 
+/**
+ * MVP-5.36H2: `outcome` classifies a failed container creation (G1).
+ * `rejected` = an authoritative structured provider rejection (4xx with the
+ * Graph error envelope): no container was created. `unknown` = anything else
+ * (timeout, transport error, 5xx, malformed 2xx): a container MAY exist, so
+ * creation must never be repeated automatically. Absent ⇒ treat as unknown.
+ */
 export type MediaContainerCreateResult =
   | { ok: true; containerId: string }
-  | ({ ok: false } & ProviderFailureDetails);
+  | ({ ok: false; outcome?: "rejected" | "unknown" } & ProviderFailureDetails);
 
 export type MediaContainerStatus = "FINISHED" | "IN_PROGRESS" | "ERROR" | "EXPIRED" | "PUBLISHED" | "UNKNOWN_VALUE";
 

@@ -142,15 +142,17 @@ export async function createInstagramMediaContainer(params: {
       params.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS,
     );
   } catch {
-    return { ok: false, ...failureDetails("transport_error", "Container creation request did not complete", null, null) };
+    return { ok: false, outcome: "unknown", ...failureDetails("transport_error", "Container creation request did not complete", null, null) };
   }
   const body = await readJsonPreservingIdentifiers(res);
   if (!res.ok) {
-    return { ok: false, ...failureDetails("container_create_failed", "Container creation was rejected", res.status, body) };
+    // MVP-5.36H2: only a 4xx with the structured Graph error envelope proves nothing was created.
+    const outcome = res.status >= 400 && res.status < 500 && isStructuredGraphRejection(body) ? "rejected" : "unknown";
+    return { ok: false, outcome, ...failureDetails("container_create_failed", "Container creation was rejected", res.status, body) };
   }
   const id = (body as JsonRecord | null)?.id;
   if (typeof id !== "string" || id === "") {
-    return { ok: false, ...failureDetails("malformed_response", "Container creation returned no container id", res.status, null) };
+    return { ok: false, outcome: "unknown", ...failureDetails("malformed_response", "Container creation returned no container id", res.status, null) };
   }
   return { ok: true, containerId: id };
 }
