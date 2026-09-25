@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { MediaPublishResult, StagedMediaPublisher } from "@/lib/social/provider";
 import { runScheduledPublishingRuntime, type RuntimeDeps } from "@/server/runtime/scheduled-publishing";
@@ -90,6 +90,21 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
 
   async function removeControl() {
     await admin.from("publishing_runtime_control").delete().eq("key", "instagram_scheduled_publishing");
+  }
+
+  /** H2: each natural invocation owns a DB-clock slot lease; clearing leases simulates the next slot. */
+  async function newSlot() {
+    await admin.from("publishing_runtime_slot_lease").delete().eq("runtime_key", "instagram_scheduled_publishing");
+  }
+
+  /** H2 single-flight: close in-flight rows of this workspace between tests so the next claim is not blocked. */
+  async function closeInflight() {
+    await admin
+      .from("publication_attempts")
+      .update({ stage: "failed", error_code: "test_cleanup" })
+      .eq("workspace_id", workspaceId)
+      .in("stage", ["validating", "container_created", "container_ready", "publish_requested"]);
+    await admin.from("publications").update({ status: "failed", error_code: "test_cleanup" }).eq("workspace_id", workspaceId).eq("status", "publishing");
   }
 
   async function account(externalId: string, metadata: Record<string, unknown>, allow: boolean): Promise<SocialAccount> {
@@ -223,12 +238,14 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
     legacyAllowlisted = await account("38281000000008200", { credentialKind: "real" }, true);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     logs = [];
+    await newSlot();
   });
 
   afterAll(async () => {
     await removeControl();
+    await newSlot();
     for (const id of vaultIds) {
       try {
         await vaultAdmin.rpc("delete_social_account_vault_secret", { p_secret_id: id });
@@ -398,8 +415,13 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
   // ---------------------------------------------------------------------------
   describe("runtime execution", () => {
     beforeEach(async () => {
+      await closeInflight();
       await setControl(true, "publish");
       await clearScheduled();
+    });
+
+    afterEach(async () => {
+      await closeInflight();
     });
 
     it("publishes exactly one allowlisted due publication: G1 = 1, G3 = 1, one Vault read, audit + safe logs (Z)", async () => {
@@ -420,7 +442,24 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
       expect((audit!.metadata as Record<string, unknown>).runId).toBe(summary.runId);
 
       const seen = events();
-      for (const event of ["scheduler_start", "reconcile", "claim", "load", "vault", "g1_dispatch", "engine", "g3_dispatch", "final"]) {
+      for (const event of [
+        "scheduler_start",
+        "lease",
+        "reconcile",
+        "work_selected",
+        "load",
+        "control_recheck",
+        "vault",
+        "attempt_started",
+        "g1_dispatch",
+        "g1_result",
+        "g2_poll",
+        "publish_requested",
+        "g3_dispatch",
+        "g3_result",
+        "lease_complete",
+        "final",
+      ]) {
         expect(seen, event).toContain(event);
       }
       // Z: every line is JSON with the runId; no credential, signed URL or service-role key anywhere.
@@ -445,6 +484,7 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
       expect(await attempts(noMedia)).toEqual([]);
 
       const legacy = await scheduled(await variant(), legacyAllowlisted);
+      await newSlot();
       const again = await runScheduledPublishingRuntime(deps({ provider }));
       expect(again).toMatchObject({ outcome: "ineligible", code: "account_not_publish_ready", vaultReads: 0 });
       expect((await pub(legacy)).status).toBe("failed");
@@ -455,7 +495,7 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
       const { provider, calls } = fakeProvider();
       const client = clientWithRpcHook(admin, "claim_runtime_publications", () => setControl(false));
       const summary = await runScheduledPublishingRuntime(deps({ provider, client }));
-      expect(summary).toMatchObject({ outcome: "runtime_disabled_after_claim", claimed: 1, vaultReads: 0 });
+      expect(summary).toMatchObject({ outcome: "runtime_disabled_after_selection", claimed: 1, vaultReads: 0, leaseCompleted: true });
       expect(calls).toEqual({ create: 0, status: 0, publish: 0, recent: 0 });
       expect((await pub(id)).status).toBe("publishing");
       expect(await attempts(id)).toEqual([]);
@@ -473,15 +513,16 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
       expect((await attempts(id)).map((a) => [a.stage, a.error_code])).toEqual([["failed", "runtime_disabled_before_create"]]);
     });
 
-    it("O: control switched OFF during polling → stopped immediately before G3 (no publish request)", async () => {
+    it("O: control switched OFF during polling → no publish request; container_ready preserved (resumable, H0 §13)", async () => {
       const id = await scheduled(await variant(), allowlisted);
       const { provider, calls } = fakeProvider({ status: () => setControl(false) });
       const summary = await runScheduledPublishingRuntime(deps({ provider }));
-      expect(summary).toMatchObject({ outcome: "completed", result: "failed_known", code: "runtime_disabled_before_publish" });
+      expect(summary).toMatchObject({ outcome: "completed", result: "deferred", code: "runtime_disabled", terminal: false });
       expect(calls).toMatchObject({ create: 1, publish: 0 });
       expect(events()).not.toContain("g3_dispatch");
-      expect((await pub(id)).status).toBe("failed");
-      expect((await attempts(id)).map((a) => [a.stage, a.error_code])).toEqual([["failed", "runtime_disabled_before_publish"]]);
+      expect(events()).not.toContain("publish_requested");
+      expect((await pub(id)).status).toBe("publishing");
+      expect((await attempts(id)).map((a) => a.stage)).toEqual(["container_ready"]);
     });
 
     it("Y: dry_run mode can never reach G3", async () => {
@@ -495,7 +536,7 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
       expect((await pub(id)).error_code).toBe("dry_run_container_ready");
     });
 
-    it("W: when polling consumes the budget, G3 is refused before publish_requested (known not published)", async () => {
+    it("W: when polling consumes the budget, G3 is not started; container_ready is deferred (no publish_requested)", async () => {
       const id = await scheduled(await variant(), allowlisted);
       let t = 0;
       const { provider, calls } = fakeProvider({
@@ -504,9 +545,11 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
         },
       });
       const summary = await runScheduledPublishingRuntime(deps({ provider, now: () => t }));
-      expect(summary).toMatchObject({ result: "failed_known", code: "insufficient_publish_time_budget" });
+      expect(summary).toMatchObject({ result: "deferred", code: "g3_budget", terminal: false });
       expect(calls.publish).toBe(0);
-      expect((await attempts(id)).map((a) => a.stage)).toEqual(["failed"]);
+      expect(events()).not.toContain("publish_requested");
+      expect((await attempts(id)).map((a) => a.stage)).toEqual(["container_ready"]);
+      expect((await pub(id)).status).toBe("publishing");
     });
 
     it("a publish timeout is outcome_unknown and is never retried (a later run claims nothing)", async () => {
@@ -523,9 +566,11 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
       };
       const { provider, calls } = fakeProvider({ publish: () => timeout });
       const summary = await runScheduledPublishingRuntime(deps({ provider }));
-      expect(summary).toMatchObject({ result: "outcome_unknown" });
+      expect(summary).toMatchObject({ result: "publish_outcome_unknown" });
+      await newSlot();
       const second = await runScheduledPublishingRuntime(deps({ provider }));
-      expect(second.outcome).toBe("nothing_claimed");
+      // Single-flight: the unresolved outcome_unknown publication blocks new claims; resume never selects it.
+      expect(second).toMatchObject({ outcome: "no_work", claimed: 0, vaultReads: 0 });
       expect(calls.publish).toBe(1);
       expect((await pub(id)).status).toBe("publishing");
       expect((await attempts(id)).map((a) => a.stage)).toEqual(["outcome_unknown"]);
@@ -612,7 +657,7 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
       await setControl(true);
       const { provider, calls } = fakeProvider();
       const summary = await runScheduledPublishingRuntime(deps({ provider, staleSeconds: 60 }));
-      expect(summary).toMatchObject({ outcome: "nothing_claimed", vaultReads: 0 });
+      expect(summary).toMatchObject({ outcome: "no_work", vaultReads: 0 });
       expect(calls).toEqual({ create: 0, status: 0, publish: 0, recent: 0 });
 
       const reconcileLine = logs.map((line) => JSON.parse(line)).find((line) => line.event === "reconcile");
@@ -627,7 +672,7 @@ describe.skipIf(!hasLocalSupabase)("MVP-5.36 Level-6 scheduled publishing runtim
       expect(actions[ids.unknown]).toBe("outcome_unknown_requires_operator");
       expect(actions[ids.recentAttempt]).toBe("skipped_attempt_recent");
       expect(actions[ids.notAllowlisted]).toBeUndefined();
-      expect(actions[ids.fresh]).toBeUndefined();
+      expect(actions[ids.fresh]).toBe("skipped_publication_recent");
 
       // R: no attempt → known pre-provider failure (+ notification, audit); never an attempt created.
       expect(await pub(ids.noAttempt)).toMatchObject({ status: "failed", error_code: "runtime_interrupted_before_attempt" });

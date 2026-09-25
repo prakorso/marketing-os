@@ -23,7 +23,8 @@ const refused = (message: string): ProviderFailureDetails => ({
 export function withRuntimeCallCeiling(provider: StagedMediaPublisher, counters: RuntimeCallCounters): StagedMediaPublisher {
   return Object.freeze({
     async createMediaContainer(input) {
-      if (counters.create >= 1) return { ok: false, ...refused("Refused: at most one container creation per runtime invocation") };
+      // Not dispatched ⇒ an authoritative, known-not-created refusal.
+      if (counters.create >= 1) return { ok: false, outcome: "rejected", ...refused("Refused: at most one container creation per runtime invocation") };
       counters.create += 1;
       return provider.createMediaContainer(input);
     },
@@ -40,5 +41,21 @@ export function withRuntimeCallCeiling(provider: StagedMediaPublisher, counters:
     async listRecentMedia() {
       return { ok: false, ...refused("Recent media reads are not part of the runtime") };
     },
+  } satisfies StagedMediaPublisher);
+}
+
+/**
+ * MVP-5.36H2: dry_run is structurally incapable of G3. The runtime hands the
+ * engine this wrapper in dry_run mode: the publish capability does not reach
+ * the underlying provider at all (an authoritative refusal, no request).
+ */
+export function withoutPublishCapability(provider: StagedMediaPublisher): StagedMediaPublisher {
+  return Object.freeze({
+    createMediaContainer: (input) => provider.createMediaContainer(input),
+    getMediaContainerStatus: (input) => provider.getMediaContainerStatus(input),
+    async publishMediaContainer() {
+      return { ok: false, outcome: "rejected", ...refused("Refused: dry_run has no publish capability") };
+    },
+    listRecentMedia: (input) => provider.listRecentMedia(input),
   } satisfies StagedMediaPublisher);
 }

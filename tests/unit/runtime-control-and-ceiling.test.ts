@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { StagedMediaPublisher } from "@/lib/social/provider";
 import { isEnvPublishingGateEnabled, readRuntimeControl } from "@/server/runtime/runtime-control";
-import { withRuntimeCallCeiling } from "@/server/runtime/runtime-provider-ceiling";
+import { withoutPublishCapability, withRuntimeCallCeiling } from "@/server/runtime/runtime-provider-ceiling";
 import { runScheduledPublishingRuntime } from "@/server/runtime/scheduled-publishing";
 import type { Database } from "@/types/database";
 
@@ -111,6 +111,25 @@ describe("withRuntimeCallCeiling (P/Q)", () => {
     expect((await guarded.publishMediaContainer(input)).ok).toBe(true);
     expect(await guarded.publishMediaContainer(input)).toMatchObject({ ok: false, outcome: "rejected", code: "runtime_call_ceiling" });
     expect(counts.publish).toBe(1);
+  });
+
+  it("H2: a second G1 refusal is an authoritative 'rejected' (never classified as unknown)", async () => {
+    const { provider } = inner();
+    const guarded = withRuntimeCallCeiling(provider, { create: 0, status: 0, publish: 0 });
+    const input = { credential: "c", accountId: "17849990000000042", imageUrl: "https://local.invalid/x.jpg", caption: null };
+    await guarded.createMediaContainer(input);
+    expect(await guarded.createMediaContainer(input)).toMatchObject({ ok: false, outcome: "rejected", code: "runtime_call_ceiling" });
+  });
+
+  it("H2: dry_run provider has no publish capability (the inner provider is never reached)", async () => {
+    const { provider, counts } = inner();
+    const dry = withoutPublishCapability(withRuntimeCallCeiling(provider, { create: 0, status: 0, publish: 0 }));
+    expect(await dry.publishMediaContainer({ credential: "c", accountId: "17849990000000042", containerId: "17900000000000000001" })).toMatchObject({
+      ok: false,
+      outcome: "rejected",
+    });
+    expect(counts.publish).toBe(0);
+    expect((await dry.createMediaContainer({ credential: "c", accountId: "17849990000000042", imageUrl: "https://local.invalid/x.jpg", caption: null })).ok).toBe(true);
   });
 
   it("recent-media reads are not available to the runtime", async () => {
