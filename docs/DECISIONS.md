@@ -948,7 +948,7 @@ verified in H3.
 
 ## 46. MARQOS Product Governance, Execution Roadmap and Release Gates
 
-Status: DRAFT — pending Owner approval (Track 0). Owner-directed
+Status: Approved — v1.2, Owner approval 2026-09-25 (Track 0, PR #5). Owner-directed
 (Panji, MARQOS Master Product Roadmap vNext). Relationship: EXTENDS #19
 (the product loop, further extended by #49); SUPERSEDES #20 ONLY as to
 execution ORDER; #18 unchanged.
@@ -1007,7 +1007,7 @@ execution ORDER; #18 unchanged.
 
 ## 47. Instagram Publishing V1 — Definition of Done
 
-Status: DRAFT — pending Owner approval (Track 0). Relationship: EXTENDS
+Status: Approved — v1.2, Owner approval 2026-09-25 (Track 0, PR #5). Relationship: EXTENDS
 #43, #44 and #45 without changing any of their locked text or safety
 contracts (dual gate, fail-closed control, slot lease, single flight, G1
 and G3 boundaries, dry run without publish capability, unknown-outcome
@@ -1075,7 +1075,7 @@ closes only when all of the following hold.
 
 ## 48. Intelligence AI and Trend Signal
 
-Status: DRAFT — pending Owner approval (Track 0). Relationship: EXTENDS
+Status: Approved — v1.2, Owner approval 2026-09-25 (Track 0, PR #5). Relationship: EXTENDS
 #21 (AI beyond content generation); SUPERSEDES #22 going forward as to
 "manual Signal → Topic association remains the complete MVP-4" and "AI
 Topic Classification is not pursued" (both remain the accurate record of
@@ -1110,7 +1110,7 @@ the approval path for intelligence AI traceability; #11 unchanged.
 
 ## 49. Content Idea, Ideation Approval and Creative Format Model
 
-Status: DRAFT — pending Owner approval (Track 0). Relationship: EXTENDS
+Status: Approved — v1.2, Owner approval 2026-09-25 (Track 0, PR #5). Relationship: EXTENDS
 #19 (the loop gains Content Idea); CLARIFIES the PRD non-goal "advanced
 video generation"; #6 and #7 unchanged.
 
@@ -1143,7 +1143,7 @@ video generation"; #6 and #7 unchanged.
 
 ## 50. Connected Assets and Social Provider Capability Model
 
-Status: DRAFT — pending Owner approval (Track 0). Relationship: EXTENDS
+Status: Approved — v1.2, Owner approval 2026-09-25 (Track 0, PR #5). Relationship: EXTENDS
 #13 and Engineering Blueprint §16; #15 unchanged.
 
 - **Connected Assets** is a product capability. Normal UX is OAuth-first:
@@ -1172,7 +1172,7 @@ Status: DRAFT — pending Owner approval (Track 0). Relationship: EXTENDS
 
 ## 51. Integrations and API Credentials
 
-Status: DRAFT — pending Owner approval (Track 0). Relationship:
+Status: Approved — v1.2, Owner approval 2026-09-25 (Track 0, PR #5). Relationship:
 EXTENDS/NARROWS #23 — the platform-managed, server-side key remains the
 default, and workspace-scoped or bring-your-own-key credentials become
 permitted ONLY through the Integrations capability; #15 unchanged.
@@ -1199,7 +1199,7 @@ permitted ONLY through the Integrations capability; #15 unchanged.
 
 ## 52. Marq — Horizontal Marketing Copilot
 
-Status: DRAFT — pending Owner approval (Track 0). Relationship: NEW;
+Status: Approved — v1.2, Owner approval 2026-09-25 (Track 0, PR #5). Relationship: NEW;
 references #12, #23/#51, #44/#45 and PRD §11.
 
 - **Horizontal.** Marq is a marketing intelligence/copilot layer across

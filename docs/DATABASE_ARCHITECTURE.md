@@ -1,8 +1,8 @@
 # MARQOS — Marketing Operating System — Database Architecture
 
 **Version:** 1.2
-**Status:** DRAFT — pending Owner approval (Track 0). Supersedes the
-unapproved v1.1 draft (2026-09-15) once approved.
+**Status:** Approved — v1.2, Owner approval 2026-09-25 (Track 0, PR #5).
+Supersedes the unapproved v1.1 draft (2026-09-15).
 **Date:** 2026-09-25
 
 **Reality markers used in this document.**

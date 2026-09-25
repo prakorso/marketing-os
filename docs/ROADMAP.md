@@ -1,7 +1,7 @@
 # MARQOS — Roadmap
 
 **Version:** 1.2
-**Status:** DRAFT — pending Owner approval (Track 0)
+**Status:** Approved — v1.2, Owner approval 2026-09-25 (Track 0, PR #5)
 **Date:** 2026-09-25
 
 This is the operational canonical roadmap of MARQOS — Marketing Operating
@@ -66,11 +66,16 @@ raise it.
 
 ### You Are Here
 
-- **Track 0 — Canon Alignment: IN PROGRESS** (this document is part of it).
-- Track 1 — Instagram V1 Closure: NOT STARTED. Its already completed
-  foundation is the historical work in §4. MVP-5.36 Level-6 Runtime
-  Hardening H0–H6 is formally closed and is not reopened. #44 Phase 2
-  (hardened controlled dry run) is proven.
+- Track 0 — Canon Alignment: CLOSED — v1.2 approved by the Owner on
+  2026-09-25 (approval PR #5); closure is effective on merge to main (§6).
+- **Track 1 — Instagram V1 Closure: NEXT / NOT STARTED.**
+  - It starts only after PR #5 is merged and the Track 0 post-merge
+    closure is verified.
+  - Its already completed foundation is the historical work in §4.
+    MVP-5.36 Level-6 Runtime Hardening H0–H6 is formally closed and is
+    not reopened.
+  - #44 Phase 2 (hardened controlled dry run) is proven. #44 Phase 3 is
+    not yet authorized or proven. #44 Phase 4 is not authorized.
 - Tracks 2–8: NOT STARTED.
 
 ### Track 0 — Canon Alignment
@@ -86,6 +91,7 @@ raise it.
   - Owner reviews the final diff and explicitly approves v1.2;
   - documents marked Approved;
   - merged to main.
+- **Status:** CLOSED (effective on merge of PR #5) — see §6.
 - **Dependencies:** none.
 - **Proof:** Class I (documentation).
 
@@ -269,3 +275,15 @@ raise it.
   - External actions write audit records;
   - new jobs record runs and failures;
   - Class II/III versions require a closure record.
+
+## 6. Closure Records
+
+### Track 0 — Canon Alignment
+
+- Track 0 canonical alignment is complete: PRD, Engineering Blueprint,
+  Database Architecture, ERD and this roadmap at v1.2, plus Decisions
+  #46–#52.
+- v1.2 and Decisions #46–#52 were approved by the Owner on 2026-09-25.
+- The approval PR is #5.
+- The closure becomes effective when PR #5 is merged to main.
+- Track 1 (Instagram V1 Closure) is next and has not started.
