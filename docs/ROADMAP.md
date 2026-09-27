@@ -67,10 +67,10 @@ raise it.
 ### You Are Here
 
 - Track 0 — Canon Alignment: CLOSED — v1.2 approved by the Owner on
-  2026-09-25 (approval PR #5); closure is effective on merge to main (§6).
+  2026-09-25; PR #5 merged to main on 2026-09-26 (§6).
 - **Track 1 — Instagram V1 Closure: NEXT / NOT STARTED.**
-  - It starts only after PR #5 is merged and the Track 0 post-merge
-    closure is verified.
+  - Its entry criterion (Track 0 closed) is met; it has not been
+    started.
   - Its already completed foundation is the historical work in §4.
     MVP-5.36 Level-6 Runtime Hardening H0–H6 is formally closed and is
     not reopened.
@@ -91,7 +91,7 @@ raise it.
   - Owner reviews the final diff and explicitly approves v1.2;
   - documents marked Approved;
   - merged to main.
-- **Status:** CLOSED (effective on merge of PR #5) — see §6.
+- **Status:** CLOSED — see §6.
 - **Dependencies:** none.
 - **Proof:** Class I (documentation).
 
@@ -285,5 +285,7 @@ raise it.
   #46–#52.
 - v1.2 and Decisions #46–#52 were approved by the Owner on 2026-09-25.
 - The approval PR is #5.
-- The closure becomes effective when PR #5 is merged to main.
+- PR #5 was merged to main on 2026-09-26 (merge commit
+  1ae676e35dc1331c3f0c59cccca541d42f7169b1). Post-merge verification and CI
+  succeeded, and the closure is effective.
 - Track 1 (Instagram V1 Closure) is next and has not started.
